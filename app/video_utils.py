@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -23,10 +24,32 @@ def asset_root() -> Path:
     return app_root()
 
 
+def runtime_platform_dir() -> str:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+
+    is_arm = machine in {"arm64", "aarch64"} or machine.startswith("arm")
+    is_x64 = machine in {"x86_64", "amd64"} or "64" in machine
+
+    if system == "darwin":
+        return "mac-arm64" if is_arm else "mac-x64"
+    if system == "windows":
+        return "windows-x64" if is_x64 else "windows"
+    if system == "linux":
+        return "linux-arm64" if is_arm else "linux-x64"
+    return f"{system}-{machine}".strip("-") or "unknown"
+
+
 def _candidate_binaries(name: str) -> list[Path]:
     runtime = asset_root() / "runtime" / "ffmpeg"
     suffixes = [".exe", ""] if os.name == "nt" else [""]
-    return [runtime / f"{name}{suffix}" for suffix in suffixes]
+    platform_runtime = runtime / runtime_platform_dir()
+    candidates: list[Path] = []
+    for suffix in suffixes:
+        candidates.append(platform_runtime / f"{name}{suffix}")
+        # Backward-compatible single-folder layout.
+        candidates.append(runtime / f"{name}{suffix}")
+    return candidates
 
 
 def find_binary(name: str) -> str:
@@ -40,8 +63,9 @@ def find_binary(name: str) -> str:
     found = shutil.which(name)
     if found:
         return found
+    target_dir = asset_root() / "runtime" / "ffmpeg" / runtime_platform_dir()
     raise RuntimeError(
-        f"找不到 {name}。请把 {name} 可执行文件放到 runtime/ffmpeg/，"
+        f"找不到 {name}。请把 {name} 可执行文件放到 {target_dir}，"
         f"或先安装 FFmpeg 并确保命令可在终端中运行。"
     )
 
@@ -64,7 +88,7 @@ def check_runtime() -> dict[str, str | bool]:
         ffprobe = ffprobe_bin()
         run_command([ffmpeg, "-version"])
         run_command([ffprobe, "-version"])
-        return {"ok": True, "ffmpeg": ffmpeg, "ffprobe": ffprobe}
+        return {"ok": True, "platform": runtime_platform_dir(), "ffmpeg": ffmpeg, "ffprobe": ffprobe}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 

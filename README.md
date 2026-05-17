@@ -48,13 +48,32 @@ run_windows.bat
 程序会按下面顺序查找 FFmpeg：
 
 1. 环境变量 `VIDEO_VARIANT_FFMPEG` / `VIDEO_VARIANT_FFPROBE`
-2. `runtime/ffmpeg/ffmpeg`、`runtime/ffmpeg/ffprobe`
-3. 系统 PATH 里的 `ffmpeg`、`ffprobe`
+2. 当前系统对应的内置目录，例如 `runtime/ffmpeg/mac-arm64/ffmpeg`
+3. 兼容旧结构：`runtime/ffmpeg/ffmpeg`、`runtime/ffmpeg/ffprobe`
+4. 系统 PATH 里的 `ffmpeg`、`ffprobe`
 
 如果要做成尽量不依赖系统环境的压缩包，请把对应系统的 FFmpeg 二进制文件放到：
 
 ```txt
-runtime/ffmpeg/
+runtime/ffmpeg/mac-arm64/
+runtime/ffmpeg/mac-x64/
+runtime/ffmpeg/windows-x64/
+runtime/ffmpeg/linux-x64/
+```
+
+常用下载地址：
+
+- macOS Apple Silicon：从 Homebrew 安装后复制 `/opt/homebrew/bin/ffmpeg` 和 `/opt/homebrew/bin/ffprobe`，或下载 [evermeet.cx FFmpeg macOS builds](https://evermeet.cx/ffmpeg/)
+- macOS Intel：从 Homebrew 安装后复制 `/usr/local/bin/ffmpeg` 和 `/usr/local/bin/ffprobe`，或下载 [evermeet.cx FFmpeg macOS builds](https://evermeet.cx/ffmpeg/)
+- Windows x64：下载 [gyan.dev FFmpeg release builds](https://www.gyan.dev/ffmpeg/builds/) 的 `release essentials` 压缩包，解压后复制 `bin/ffmpeg.exe` 和 `bin/ffprobe.exe`
+- Linux x64：下载 [johnvansickle.com FFmpeg static builds](https://johnvansickle.com/ffmpeg/) 的 `amd64 static` 压缩包，解压后复制 `ffmpeg` 和 `ffprobe`
+
+macOS / Linux 复制后需要给执行权限：
+
+```bash
+chmod +x runtime/ffmpeg/mac-arm64/ffmpeg runtime/ffmpeg/mac-arm64/ffprobe
+chmod +x runtime/ffmpeg/mac-x64/ffmpeg runtime/ffmpeg/mac-x64/ffprobe
+chmod +x runtime/ffmpeg/linux-x64/ffmpeg runtime/ffmpeg/linux-x64/ffprobe
 ```
 
 ## 打包成可执行文件
@@ -92,8 +111,9 @@ VideoVariantStudio/
 ├── VideoVariantStudio 或 VideoVariantStudio.exe
 ├── runtime/
 │   └── ffmpeg/
-│       ├── ffmpeg / ffmpeg.exe
-│       └── ffprobe / ffprobe.exe
+│       └── 当前系统目录/
+│           ├── ffmpeg / ffmpeg.exe
+│           └── ffprobe / ffprobe.exe
 └── data/
     ├── uploads/
     └── outputs/
