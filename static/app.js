@@ -85,6 +85,21 @@ async function pollTasks() {
   refreshSubmitState();
 }
 
+async function loadExistingTasks() {
+  try {
+    const res = await fetch(`/api/tasks?_=${Date.now()}`);
+    if (!res.ok) throw new Error(await res.text());
+    const payload = await res.json();
+    (payload.tasks || []).forEach(task => tasks.set(task.task_id, task));
+    renderTasks();
+    refreshSubmitState();
+  } catch (error) {
+    taskList.className = 'task-list empty';
+    taskList.innerHTML = `<span class="error">无法连接本地服务：${escapeHtml(error.message || error)}</span>`;
+    setSubmitLocked(false);
+  }
+}
+
 function renderTasks() {
   const list = [...tasks.values()].reverse();
   if (!list.length) {
@@ -152,4 +167,5 @@ function escapeHtml(text) {
 
 checkRuntime();
 checkVersion();
+loadExistingTasks();
 setInterval(pollTasks, 1800);
