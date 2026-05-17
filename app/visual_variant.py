@@ -17,6 +17,10 @@ def _run(command: list[str]) -> None:
         raise RuntimeError(f"FFmpeg 执行失败，code={result.returncode}: {stderr[-1600:]}")
 
 
+def _quote_concat_path(path: Path) -> str:
+    return "file '" + str(path).replace("'", "'\\''") + "'"
+
+
 def _even(value: float) -> int:
     number = max(2, int(value))
     return number if number % 2 == 0 else number - 1
@@ -210,3 +214,102 @@ def render_variant(
 
     shutil.move(str(temp_path), str(output_path))
     return output_path, effects, info
+
+
+def merge_videos(
+    *,
+    input_paths: list[Union[str, Path]],
+    work_dir: Union[str, Path],
+    task_id: str,
+) -> Path:
+    """Normalize uploaded clips, then concat them in upload order."""
+    if not input_paths:
+        raise ValueError("没有可合并的视频。")
+    paths = [Path(path) for path in input_paths]
+    if len(paths) == 1:
+        return paths[0]
+
+    root = Path(work_dir) / f"{task_id}_merge_work"
+    root.mkdir(parents=True, exist_ok=True)
+    normalized_paths: list[Path] = []
+
+    for index, path in enumerate(paths, start=1):
+        normalized = root / f"clip_{index:03d}.mp4"
+        info = get_video_info(path)
+        command = [
+            ffmpeg_bin(),
+            "-y",
+            "-fflags",
+            "+discardcorrupt",
+            "-i",
+            str(path),
+        ]
+        if info.has_audio:
+            command += [
+                "-filter_complex",
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+                "fps=30,setsar=1,format=yuv420p[v];"
+                "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a]",
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+            ]
+        else:
+            command += [
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-filter_complex",
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,"
+                "fps=30,setsar=1,format=yuv420p[v]",
+                "-map",
+                "[v]",
+                "-map",
+                "1:a",
+                "-shortest",
+            ]
+        command += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            str(normalized),
+        ]
+        _run(command)
+        normalized_paths.append(normalized)
+
+    concat_file = root / "concat.txt"
+    concat_file.write_text("\n".join(_quote_concat_path(path) for path in normalized_paths), encoding="utf-8")
+    merged_path = root / f"{task_id}_merged.mp4"
+    _run(
+        [
+            ffmpeg_bin(),
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(merged_path),
+        ]
+    )
+    return merged_path

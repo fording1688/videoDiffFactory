@@ -40,6 +40,8 @@ class VariantTask(BaseModel):
     message: str = "等待处理"
     original_filename: str = ""
     input_path: str = ""
+    source_paths: list[str] = Field(default_factory=list)
+    source_filenames: list[str] = Field(default_factory=list)
     output_path: Optional[str] = None
     download_url: Optional[str] = None
     options: VariantOptions = Field(default_factory=VariantOptions)

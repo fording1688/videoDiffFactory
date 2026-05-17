@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, safe_stem
-from .visual_variant import render_variant
+from .visual_variant import merge_videos, render_variant
 
 
 APP_ROOT = app_root()
@@ -65,9 +65,15 @@ def _process(task_id: str) -> None:
         runtime = check_runtime()
         if not runtime.get("ok"):
             raise RuntimeError(str(runtime.get("error") or "FFmpeg runtime missing"))
-        _set(task, status=TaskState.processing, progress=10, message="正在读取视频并生成随机视觉参数")
+        _set(task, status=TaskState.processing, progress=8, message="正在准备视频素材")
+        input_video = task.input_path
+        if task.source_paths and len(task.source_paths) > 1:
+            _set(task, progress=22, message=f"正在按上传顺序合并 {len(task.source_paths)} 个视频")
+            input_video = str(merge_videos(input_paths=task.source_paths, work_dir=OUTPUT_DIR, task_id=task.task_id))
+            task.input_path = input_video
+        _set(task, progress=42, message="正在生成随机视觉参数并处理合并后的视频")
         output_path, effects, info = render_variant(
-            input_video=task.input_path,
+            input_video=input_video,
             output_dir=OUTPUT_DIR,
             task_id=task.task_id,
             options=task.options,
@@ -142,20 +148,52 @@ async def upload_batch(
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
 ) -> BatchUploadResponse:
-    tasks: list[UploadResponse] = []
-    for file in files:
-        response = await upload_video(
-            file=file,
-            intensity=intensity,
-            effect_background=effect_background,
-            effect_zoom=effect_zoom,
-            effect_color=effect_color,
-            effect_texture=effect_texture,
-            effect_speed=effect_speed,
-            effect_vignette=effect_vignette,
-        )
-        tasks.append(response)
-    return BatchUploadResponse(tasks=tasks)
+    if not files:
+        raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
+
+    task_id = uuid.uuid4().hex[:12]
+    source_paths: list[str] = []
+    source_filenames: list[str] = []
+    for index, file in enumerate(files, start=1):
+        if not file.filename:
+            continue
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".webm"}:
+            raise HTTPException(status_code=400, detail=f"{file.filename} 格式不支持。")
+        source_filenames.append(file.filename)
+        input_path = UPLOAD_DIR / f"{task_id}_{index:03d}_{safe_stem(file.filename)}{suffix}"
+        with input_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        source_paths.append(str(input_path))
+
+    if not source_paths:
+        raise HTTPException(status_code=400, detail="没有读取到有效视频文件。")
+
+    options = VariantOptions(
+        intensity=intensity,
+        effect_background=effect_background,
+        effect_zoom=effect_zoom,
+        effect_color=effect_color,
+        effect_texture=effect_texture,
+        effect_speed=effect_speed,
+        effect_vignette=effect_vignette,
+    )
+    if len(source_filenames) == 1:
+        original_filename = source_filenames[0]
+    else:
+        first_name = safe_stem(source_filenames[0])
+        original_filename = f"{first_name}_merged_{len(source_filenames)}_clips.mp4"
+    task = VariantTask(
+        task_id=task_id,
+        original_filename=original_filename,
+        input_path=source_paths[0],
+        source_paths=source_paths,
+        source_filenames=source_filenames,
+        options=options,
+    )
+    TASKS[task_id] = task
+    threading.Thread(target=_process, args=(task_id,), daemon=True).start()
+    return BatchUploadResponse(tasks=[UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")])
 
 
 @app.get("/api/tasks")

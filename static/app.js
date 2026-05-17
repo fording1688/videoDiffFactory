@@ -40,7 +40,7 @@ form.addEventListener('submit', async (event) => {
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
     const payload = await res.json();
-    payload.tasks.forEach(task => tasks.set(task.task_id, { task_id: task.task_id, status_url: task.status_url }));
+    payload.tasks.forEach(task => tasks.set(task.task_id, { task_id: task.task_id, status_url: task.status_url, message: '已创建合并处理任务' }));
     renderTasks();
   } catch (error) {
     alert('上传失败：' + (error.message || error));
@@ -76,12 +76,15 @@ function renderTasks() {
     const progress = task.progress || 0;
     const status = task.status || 'queued';
     const title = task.original_filename || task.task_id;
+    const sourceCount = task.source_filenames?.length || 0;
+    const sourceText = sourceCount > 1 ? `<p>已合并 ${sourceCount} 个源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
     const download = task.download_url && status === 'completed' ? `<a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a>` : '';
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
     return `<article class="task">
       <div class="task-header"><div class="task-title">${escapeHtml(title)}</div><span class="badge">${escapeHtml(status)}</span></div>
       <div class="progress"><i style="width:${progress}%"></i></div>
       <p>${escapeHtml(task.message || '等待处理')}</p>
+      ${sourceText}
       ${download}${error}
     </article>`;
   }).join('');
