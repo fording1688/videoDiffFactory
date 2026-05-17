@@ -5,6 +5,7 @@ import shutil
 import threading
 import traceback
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,34 @@ def _dump(task: VariantTask) -> dict[str, Any]:
     return task.dict()
 
 
+def _update_timing(task: VariantTask) -> None:
+    now = datetime.utcnow()
+    task.updated_at = now
+    if task.status == TaskState.processing and task.started_at is None:
+        task.started_at = now
+
+    start = task.started_at or task.created_at
+    task.elapsed_seconds = max(0.0, (now - start).total_seconds())
+
+    if task.status == TaskState.completed:
+        task.completed_at = task.completed_at or now
+        task.remaining_seconds = 0
+        if task.elapsed_seconds > 0:
+            task.estimated_total_seconds = task.elapsed_seconds
+        return
+
+    if task.status == TaskState.failed:
+        task.completed_at = task.completed_at or now
+        task.remaining_seconds = None
+        return
+
+    if task.status == TaskState.processing and task.progress > 0:
+        estimated_total = task.elapsed_seconds / max(task.progress / 100, 0.01)
+        # Keep the estimate stable and avoid showing unrealistic tiny numbers at startup.
+        task.estimated_total_seconds = max(task.elapsed_seconds, estimated_total)
+        task.remaining_seconds = max(0.0, task.estimated_total_seconds - task.elapsed_seconds)
+
+
 def _set(task: VariantTask, *, status: TaskState | None = None, progress: int | None = None, message: str | None = None) -> None:
     if status is not None:
         task.status = status
@@ -57,6 +86,7 @@ def _set(task: VariantTask, *, status: TaskState | None = None, progress: int | 
         task.progress = progress
     if message is not None:
         task.message = message
+    _update_timing(task)
     TASKS[task.task_id] = task
 
 

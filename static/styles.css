@@ -86,6 +86,8 @@ input[type="number"] {
 .badge { color: var(--mint); font-size: 12px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
 .progress { height: 8px; margin: 14px 0; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08); }
 .progress i { display: block; height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--mint), var(--orange)); }
+.task-meta { display: flex; flex-wrap: wrap; gap: 10px 16px; color: rgba(245,255,248,.78); font-size: 13px; font-weight: 800; }
+.task-meta span { padding: 7px 10px; border-radius: 999px; background: rgba(101,243,223,.08); border: 1px solid rgba(101,243,223,.14); }
 .task p { margin: 8px 0 0; color: var(--muted); }
 .task a { display: inline-block; margin-top: 12px; color: #071411; background: var(--mint); padding: 10px 14px; border-radius: 12px; text-decoration: none; font-weight: 900; }
 .error { color: var(--danger) !important; }

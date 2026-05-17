@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -38,6 +39,13 @@ class VariantTask(BaseModel):
     status: TaskState = TaskState.queued
     progress: int = 0
     message: str = "等待处理"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    elapsed_seconds: float = 0
+    estimated_total_seconds: Optional[float] = None
+    remaining_seconds: Optional[float] = None
     original_filename: str = ""
     input_path: str = ""
     source_paths: list[str] = Field(default_factory=list)

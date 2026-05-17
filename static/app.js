@@ -100,17 +100,41 @@ function renderTasks() {
     const sourceCount = task.source_filenames?.length || 0;
     const sourceText = sourceCount > 1 ? `<p>已合并 ${sourceCount} 个源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
     const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，完成后会自动合并为一个总视频。</p>` : '';
+    const timingText = buildTimingText(task);
     const download = task.download_url && status === 'completed' ? `<a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a>` : '';
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
     return `<article class="task">
       <div class="task-header"><div class="task-title">${escapeHtml(title)}</div><span class="badge">${escapeHtml(status)}</span></div>
       <div class="progress"><i style="width:${progress}%"></i></div>
+      <div class="task-meta">
+        <span>当前进度：${progress}%</span>
+        <span>${timingText}</span>
+      </div>
       <p>${escapeHtml(task.message || '等待处理')}</p>
       ${sourceText}
       ${versionText}
       ${download}${error}
     </article>`;
   }).join('');
+}
+
+function buildTimingText(task) {
+  const elapsed = formatDuration(task.elapsed_seconds);
+  if (task.status === 'completed') return `总处理时间：${elapsed}`;
+  if (task.status === 'failed') return `已处理：${elapsed}`;
+  const remaining = typeof task.remaining_seconds === 'number' ? formatDuration(task.remaining_seconds) : '计算中';
+  return `已处理：${elapsed} · 预计剩余：${remaining}`;
+}
+
+function formatDuration(value) {
+  const seconds = Math.max(0, Math.round(Number(value || 0)));
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins ? `${hours} 小时 ${mins} 分` : `${hours} 小时`;
 }
 
 function refreshSubmitState() {
