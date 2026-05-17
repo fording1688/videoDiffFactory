@@ -89,7 +89,8 @@ input[type="number"] {
 .task-meta { display: flex; flex-wrap: wrap; gap: 10px 16px; color: rgba(245,255,248,.78); font-size: 13px; font-weight: 800; }
 .task-meta span { padding: 7px 10px; border-radius: 999px; background: rgba(101,243,223,.08); border: 1px solid rgba(101,243,223,.14); }
 .task p { margin: 8px 0 0; color: var(--muted); }
-.task a { display: inline-block; margin-top: 12px; color: #071411; background: var(--mint); padding: 10px 14px; border-radius: 12px; text-decoration: none; font-weight: 900; }
+.download-list { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; margin-top: 12px; }
+.task a { display: inline-block; color: #071411; background: var(--mint); padding: 10px 14px; border-radius: 12px; text-decoration: none; font-weight: 900; }
 .error { color: var(--danger) !important; }
 @media (max-width: 860px) {
   .hero, .grid { grid-template-columns: 1fr; display: grid; }

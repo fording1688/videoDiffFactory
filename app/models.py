@@ -52,6 +52,7 @@ class VariantTask(BaseModel):
     source_filenames: list[str] = Field(default_factory=list)
     output_count: int = 1
     variant_paths: list[str] = Field(default_factory=list)
+    variant_download_urls: list[str] = Field(default_factory=list)
     output_path: Optional[str] = None
     download_url: Optional[str] = None
     options: VariantOptions = Field(default_factory=VariantOptions)

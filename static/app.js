@@ -62,7 +62,7 @@ form.addEventListener('submit', async (event) => {
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
     const payload = await res.json();
-    payload.tasks.forEach(task => tasks.set(task.task_id, { task_id: task.task_id, status_url: task.status_url, message: '已创建合并处理任务' }));
+    payload.tasks.forEach(task => tasks.set(task.task_id, { task_id: task.task_id, status_url: task.status_url, message: '已创建独立处理任务' }));
     renderTasks();
   } catch (error) {
     alert('上传失败：' + (error.message || error));
@@ -112,11 +112,10 @@ function renderTasks() {
     const progress = task.progress || 0;
     const status = task.status || 'queued';
     const title = task.original_filename || task.task_id;
-    const sourceCount = task.source_filenames?.length || 0;
-    const sourceText = sourceCount > 1 ? `<p>已合并 ${sourceCount} 个源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
-    const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，完成后会自动合并为一个总视频。</p>` : '';
+    const sourceText = task.source_filenames?.length ? `<p>源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
+    const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，每个版本都会提供单独下载链接。</p>` : '';
     const timingText = buildTimingText(task);
-    const download = task.download_url && status === 'completed' ? `<a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a>` : '';
+    const download = buildDownloadLinks(task, status);
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
     return `<article class="task">
       <div class="task-header"><div class="task-title">${escapeHtml(title)}</div><span class="badge">${escapeHtml(status)}</span></div>
@@ -131,6 +130,22 @@ function renderTasks() {
       ${download}${error}
     </article>`;
   }).join('');
+}
+
+function buildDownloadLinks(task, status) {
+  if (status !== 'completed') return '';
+  const urls = task.variant_download_urls || [];
+  if (urls.length) {
+    return `<div class="download-list">${urls.map((url, index) => {
+      const path = task.variant_paths?.[index] || '';
+      const name = path.split('/').pop() || `版本 ${index + 1}`;
+      return `<a href="${url}">下载版本 ${index + 1}：${escapeHtml(name)}</a>`;
+    }).join('')}</div>`;
+  }
+  if (task.download_url) {
+    return `<div class="download-list"><a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a></div>`;
+  }
+  return '';
 }
 
 function buildTimingText(task) {

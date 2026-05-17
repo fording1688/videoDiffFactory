@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, safe_stem
-from .visual_variant import merge_videos, render_variant
+from .visual_variant import render_variant
 
 
 APP_ROOT = app_root()
@@ -122,16 +122,12 @@ def _process(task_id: str) -> None:
             raise RuntimeError(str(runtime.get("error") or "FFmpeg runtime missing"))
         _set(task, status=TaskState.processing, progress=8, message="正在准备视频素材")
         input_video = task.input_path
-        if task.source_paths and len(task.source_paths) > 1:
-            _set(task, progress=22, message=f"正在按上传顺序合并 {len(task.source_paths)} 个视频")
-            input_video = str(merge_videos(input_paths=task.source_paths, work_dir=OUTPUT_DIR, task_id=task.task_id))
-            task.input_path = input_video
         variant_paths: list[str] = []
         effects_by_version: dict[str, Any] = {}
         info = None
         total = max(1, min(task.output_count, 20))
         for index in range(1, total + 1):
-            progress = 24 + int((index - 1) / total * 54)
+            progress = 12 + int((index - 1) / total * 78)
             _set(task, progress=progress, message=f"正在生成第 {index}/{total} 个视觉版本")
             variant_task_id = f"{task.task_id}v{index:02d}"
             output_path, effects, info = render_variant(
@@ -145,19 +141,13 @@ def _process(task_id: str) -> None:
             effects_by_version[f"version_{index:02d}"] = effects
 
         task.variant_paths = variant_paths
-        if total > 1:
-            _set(task, progress=84, message=f"正在把 {total} 个版本合并成最终下载视频")
-            final_path = merge_videos(input_paths=variant_paths, work_dir=OUTPUT_DIR, task_id=f"{task.task_id}_final")
-            final_output = OUTPUT_DIR / f"{safe_stem(task.original_filename)}_{total}_versions_final.mp4"
-            shutil.move(str(final_path), str(final_output))
-            output_path = final_output
-        else:
-            output_path = Path(variant_paths[0])
+        task.variant_download_urls = [f"/api/download/{task.task_id}/variants/{index}" for index in range(1, len(variant_paths) + 1)]
+        output_path = Path(variant_paths[0])
         task.video_info = info
         task.effects = effects_by_version
         task.output_path = str(output_path)
-        task.download_url = f"/api/download/{task.task_id}"
-        _set(task, status=TaskState.completed, progress=100, message=f"处理完成，已生成 {total} 个版本并合并为一个视频")
+        task.download_url = task.variant_download_urls[0] if len(task.variant_download_urls) == 1 else None
+        _set(task, status=TaskState.completed, progress=100, message=f"处理完成，已生成 {total} 个独立版本")
     except Exception as exc:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
@@ -233,50 +223,43 @@ async def upload_batch(
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
 
-    task_id = uuid.uuid4().hex[:12]
-    source_paths: list[str] = []
-    source_filenames: list[str] = []
+    responses: list[UploadResponse] = []
     for index, file in enumerate(files, start=1):
         if not file.filename:
             continue
         suffix = Path(file.filename).suffix.lower()
         if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".webm"}:
             raise HTTPException(status_code=400, detail=f"{file.filename} 格式不支持。")
-        source_filenames.append(file.filename)
+        task_id = uuid.uuid4().hex[:12]
         input_path = UPLOAD_DIR / f"{task_id}_{index:03d}_{safe_stem(file.filename)}{suffix}"
         with input_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        source_paths.append(str(input_path))
+        options = VariantOptions(
+            intensity=intensity,
+            effect_background=effect_background,
+            effect_zoom=effect_zoom,
+            effect_color=effect_color,
+            effect_texture=effect_texture,
+            effect_speed=effect_speed,
+            effect_vignette=effect_vignette,
+        )
+        task = VariantTask(
+            task_id=task_id,
+            original_filename=file.filename,
+            input_path=str(input_path),
+            source_paths=[str(input_path)],
+            source_filenames=[file.filename],
+            options=options,
+            output_count=max(1, min(int(output_count or 1), 20)),
+        )
+        TASKS[task_id] = task
+        responses.append(UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}"))
+        threading.Thread(target=_process, args=(task_id,), daemon=True).start()
 
-    if not source_paths:
+    if not responses:
         raise HTTPException(status_code=400, detail="没有读取到有效视频文件。")
 
-    options = VariantOptions(
-        intensity=intensity,
-        effect_background=effect_background,
-        effect_zoom=effect_zoom,
-        effect_color=effect_color,
-        effect_texture=effect_texture,
-        effect_speed=effect_speed,
-        effect_vignette=effect_vignette,
-    )
-    if len(source_filenames) == 1:
-        original_filename = source_filenames[0]
-    else:
-        first_name = safe_stem(source_filenames[0])
-        original_filename = f"{first_name}_merged_{len(source_filenames)}_clips.mp4"
-    task = VariantTask(
-        task_id=task_id,
-        original_filename=original_filename,
-        input_path=source_paths[0],
-        source_paths=source_paths,
-        source_filenames=source_filenames,
-        options=options,
-        output_count=max(1, min(int(output_count or 1), 20)),
-    )
-    TASKS[task_id] = task
-    threading.Thread(target=_process, args=(task_id,), daemon=True).start()
-    return BatchUploadResponse(tasks=[UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")])
+    return BatchUploadResponse(tasks=responses)
 
 
 @app.get("/api/tasks")
@@ -295,9 +278,23 @@ def get_task(task_id: str) -> dict[str, Any]:
 @app.get("/api/download/{task_id}")
 def download(task_id: str) -> FileResponse:
     task = TASKS.get(task_id)
-    if not task or not task.output_path:
+    if not task:
         raise HTTPException(status_code=404, detail="输出文件不存在。")
-    path = Path(task.output_path)
+    output = task.output_path or (task.variant_paths[0] if task.variant_paths else None)
+    if not output:
+        raise HTTPException(status_code=404, detail="输出文件不存在。")
+    path = Path(output)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="输出文件已不存在。")
+    return FileResponse(path, filename=path.name, media_type="video/mp4")
+
+
+@app.get("/api/download/{task_id}/variants/{index}")
+def download_variant(task_id: str, index: int) -> FileResponse:
+    task = TASKS.get(task_id)
+    if not task or index < 1 or index > len(task.variant_paths):
+        raise HTTPException(status_code=404, detail="输出文件不存在。")
+    path = Path(task.variant_paths[index - 1])
     if not path.exists():
         raise HTTPException(status_code=404, detail="输出文件已不存在。")
     return FileResponse(path, media_type="video/mp4", filename=path.name)

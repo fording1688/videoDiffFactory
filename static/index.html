@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260517-task-sync" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260517-independent-files" />
 </head>
 <body>
   <main class="shell">
@@ -12,7 +12,7 @@
       <div>
         <p class="eyebrow">LOCAL VIDEO TOOLKIT</p>
         <h1>视频差异化工厂</h1>
-        <p class="lead">本地把多个素材按上传顺序合并成一条视频，再生成新的视觉版本，用于素材 A/B 测试、内容排期和创意验证。</p>
+        <p class="lead">本地批量处理多个素材，每个视频独立生成视觉版本和下载链接，用于素材 A/B 测试、内容排期和创意验证。</p>
       </div>
       <div class="status-card" id="runtimeCard">
         <span>Runtime</span>
@@ -61,7 +61,7 @@
         </div>
 
         <button class="primary" type="submit">开始生成视觉版本</button>
-        <p class="hint">多选视频会先按上传顺序合并成一个视频；例如版本数量填 3，会生成 3 个差异化版本，最后再合并成一个总视频供下载。</p>
+        <p class="hint">多选视频会分别独立处理，不会互相合并；例如上传 5 个视频、版本数量填 3，会输出 15 个独立下载版本。</p>
       </form>
 
       <section class="panel results">
@@ -73,6 +73,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=20260517-task-sync"></script>
+  <script src="/static/app.js?v=20260517-independent-files"></script>
 </body>
 </html>
