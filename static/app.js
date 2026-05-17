@@ -26,6 +26,20 @@ async function checkRuntime() {
   }
 }
 
+async function checkVersion() {
+  const target = document.getElementById('versionInfo');
+  if (!target) return;
+  try {
+    const res = await fetch('/api/version');
+    const data = await res.json();
+    const time = data.committed_at ? data.committed_at.replace(' +0800', '') : 'local build';
+    target.textContent = `Version ${data.version || 'local'} · ${time}`;
+    if (data.subject) target.title = data.subject;
+  } catch (error) {
+    target.textContent = 'Version local';
+  }
+}
+
 function boolField(formData, name) {
   formData.set(name, form.elements[name].checked ? 'true' : 'false');
 }
@@ -113,4 +127,5 @@ function escapeHtml(text) {
 }
 
 checkRuntime();
+checkVersion();
 setInterval(pollTasks, 1800);

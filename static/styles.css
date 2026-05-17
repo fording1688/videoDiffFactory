@@ -38,6 +38,7 @@ h2 { margin: 0; font-size: 32px; letter-spacing: -.03em; }
 .status-card { min-width: 220px; align-self: center; padding: 28px; border-radius: 28px; background: var(--panel-2); border: 1px solid var(--line); }
 .status-card span, .status-card small { display: block; color: var(--muted); }
 .status-card strong { display: block; margin: 8px 0; font-size: 34px; color: var(--mint); }
+.status-card em { display: block; margin-top: 12px; color: rgba(245,255,248,.72); font-size: 12px; font-style: normal; line-height: 1.5; word-break: break-word; }
 .status-card.bad strong { color: var(--danger); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 .uploader, .results { padding: 34px; }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import shutil
 import threading
 import traceback
@@ -57,6 +58,30 @@ def _set(task: VariantTask, *, status: TaskState | None = None, progress: int | 
     if message is not None:
         task.message = message
     TASKS[task.task_id] = task
+
+
+def _version_info() -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(APP_ROOT), "log", "-1", "--format=%h|%ci|%s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit, committed_at, subject = (result.stdout.strip().split("|", 2) + ["", "", ""])[:3]
+        return {
+            "ok": True,
+            "version": commit or "dev",
+            "committed_at": committed_at,
+            "subject": subject,
+        }
+    except Exception:
+        return {
+            "ok": True,
+            "version": "local",
+            "committed_at": "",
+            "subject": "Packaged local build",
+        }
 
 
 def _process(task_id: str) -> None:
@@ -117,6 +142,11 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "runtime": check_runtime(), "data_dir": str(DATA_DIR)}
+
+
+@app.get("/api/version")
+def version() -> dict[str, Any]:
+    return _version_info()
 
 
 @app.post("/api/upload", response_model=UploadResponse)
