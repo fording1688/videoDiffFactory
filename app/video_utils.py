@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Union
+
+from .models import VideoInfo
+
+
+def app_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def asset_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", app_root()))
+    return app_root()
+
+
+def _candidate_binaries(name: str) -> list[Path]:
+    runtime = asset_root() / "runtime" / "ffmpeg"
+    suffixes = [".exe", ""] if os.name == "nt" else [""]
+    return [runtime / f"{name}{suffix}" for suffix in suffixes]
+
+
+def find_binary(name: str) -> str:
+    env_name = f"VIDEO_VARIANT_{name.upper()}"
+    env_value = os.getenv(env_name)
+    if env_value and Path(env_value).exists():
+        return env_value
+    for candidate in _candidate_binaries(name):
+        if candidate.exists():
+            return str(candidate)
+    found = shutil.which(name)
+    if found:
+        return found
+    raise RuntimeError(
+        f"找不到 {name}。请把 {name} 可执行文件放到 runtime/ffmpeg/，"
+        f"或先安装 FFmpeg 并确保命令可在终端中运行。"
+    )
+
+
+def ffmpeg_bin() -> str:
+    return find_binary("ffmpeg")
+
+
+def ffprobe_bin() -> str:
+    return find_binary("ffprobe")
+
+
+def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, capture_output=True, text=True, check=True)
+
+
+def check_runtime() -> dict[str, str | bool]:
+    try:
+        ffmpeg = ffmpeg_bin()
+        ffprobe = ffprobe_bin()
+        run_command([ffmpeg, "-version"])
+        run_command([ffprobe, "-version"])
+        return {"ok": True, "ffmpeg": ffmpeg, "ffprobe": ffprobe}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def get_video_info(video_path: Union[str, Path]) -> VideoInfo:
+    command = [
+        ffprobe_bin(),
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        str(video_path),
+    ]
+    payload = json.loads(run_command(command).stdout or "{}")
+    streams = payload.get("streams", [])
+    video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), {})
+    audio_stream = next((stream for stream in streams if stream.get("codec_type") == "audio"), {})
+    duration = float(payload.get("format", {}).get("duration") or video_stream.get("duration") or 0)
+    fps_text = video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate") or "0/1"
+    try:
+        numerator, denominator = fps_text.split("/")
+        fps = float(numerator) / max(float(denominator), 1)
+    except Exception:
+        fps = 0
+    return VideoInfo(
+        duration=round(duration, 3),
+        width=int(video_stream.get("width") or 0),
+        height=int(video_stream.get("height") or 0),
+        fps=round(fps, 3),
+        has_audio=bool(audio_stream),
+        video_codec=video_stream.get("codec_name"),
+        audio_codec=audio_stream.get("codec_name"),
+    )
+
+
+def safe_stem(filename: str) -> str:
+    stem = Path(filename).stem.strip() or "video"
+    safe = "".join(char if char.isalnum() or char in ("-", "_") else "_" for char in stem)
+    return safe[:90] or "video"

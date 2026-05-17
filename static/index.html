@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Video Variant Studio</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">LOCAL VIDEO TOOLKIT</p>
+        <h1>视频差异化工厂</h1>
+        <p class="lead">本地批量生成不同视觉版本，用于素材 A/B 测试、内容排期和多版本创意验证。不上传云端，文件保存在本机。</p>
+      </div>
+      <div class="status-card" id="runtimeCard">
+        <span>Runtime</span>
+        <strong>检测中</strong>
+        <small>FFmpeg / FFprobe</small>
+      </div>
+    </section>
+
+    <section class="grid">
+      <form class="panel uploader" id="uploadForm">
+        <div class="section-title">
+          <p class="eyebrow">VISUAL VARIANT</p>
+          <h2>上传视频</h2>
+        </div>
+        <label class="drop-zone">
+          <span>选择一个或多个 MP4 / MOV / AVI</span>
+          <input id="videoFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+        </label>
+
+        <div class="field-row">
+          <label>
+            处理强度
+            <select id="intensity" name="intensity">
+              <option value="light">轻微</option>
+              <option value="balanced" selected>均衡推荐</option>
+              <option value="strong">明显</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="switches">
+          <label><input type="checkbox" name="effect_background" checked /> 模糊动态背景</label>
+          <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
+          <label><input type="checkbox" name="effect_color" checked /> 色彩微调</label>
+          <label><input type="checkbox" name="effect_texture" checked /> 质感噪点</label>
+          <label><input type="checkbox" name="effect_speed" checked /> 微变速</label>
+          <label><input type="checkbox" name="effect_vignette" checked /> 暗角层</label>
+        </div>
+
+        <button class="primary" type="submit">开始生成视觉版本</button>
+        <p class="hint">参数由系统随机生成，你只需要打开或关闭处理模块。</p>
+      </form>
+
+      <section class="panel results">
+        <div class="section-title">
+          <p class="eyebrow">TASKS</p>
+          <h2>处理状态</h2>
+        </div>
+        <div id="taskList" class="task-list empty">等待上传视频。</div>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
