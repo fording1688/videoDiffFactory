@@ -52,7 +52,7 @@ run_windows.bat
 3. 兼容旧结构：`runtime/ffmpeg/ffmpeg`、`runtime/ffmpeg/ffprobe`
 4. 系统 PATH 里的 `ffmpeg`、`ffprobe`
 
-仓库默认不内置 FFmpeg 二进制文件。发给客户时建议只保留空目录和下载说明，让客户按自己的系统下载后放进去：
+仓库默认不内置 FFmpeg 二进制文件。务必按自己的系统下载后放进去：
 
 ```txt
 runtime/ffmpeg/mac-arm64/
