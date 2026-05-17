@@ -36,6 +36,7 @@ form.addEventListener('submit', async (event) => {
     const data = new FormData();
     [...files].forEach(file => data.append('files', file));
     data.set('intensity', document.getElementById('intensity').value);
+    data.set('output_count', document.getElementById('outputCount').value || '1');
     ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette'].forEach(name => boolField(data, name));
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
@@ -78,6 +79,7 @@ function renderTasks() {
     const title = task.original_filename || task.task_id;
     const sourceCount = task.source_filenames?.length || 0;
     const sourceText = sourceCount > 1 ? `<p>已合并 ${sourceCount} 个源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
+    const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，完成后会自动合并为一个总视频。</p>` : '';
     const download = task.download_url && status === 'completed' ? `<a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a>` : '';
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
     return `<article class="task">
@@ -85,6 +87,7 @@ function renderTasks() {
       <div class="progress"><i style="width:${progress}%"></i></div>
       <p>${escapeHtml(task.message || '等待处理')}</p>
       ${sourceText}
+      ${versionText}
       ${download}${error}
     </article>`;
   }).join('');

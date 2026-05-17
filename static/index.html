@@ -43,6 +43,13 @@
           </label>
         </div>
 
+        <div class="field-row">
+          <label>
+            生成版本数量
+            <input id="outputCount" name="output_count" type="number" min="1" max="20" value="3" />
+          </label>
+        </div>
+
         <div class="switches">
           <label><input type="checkbox" name="effect_background" checked /> 模糊动态背景</label>
           <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
@@ -53,7 +60,7 @@
         </div>
 
         <button class="primary" type="submit">开始生成视觉版本</button>
-        <p class="hint">多选视频会先按上传顺序合并成一个视频，再进行视觉处理；参数由系统随机生成。</p>
+        <p class="hint">多选视频会先按上传顺序合并成一个视频；例如版本数量填 3，会生成 3 个差异化版本，最后再合并成一个总视频供下载。</p>
       </form>
 
       <section class="panel results">

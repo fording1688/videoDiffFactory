@@ -71,19 +71,38 @@ def _process(task_id: str) -> None:
             _set(task, progress=22, message=f"正在按上传顺序合并 {len(task.source_paths)} 个视频")
             input_video = str(merge_videos(input_paths=task.source_paths, work_dir=OUTPUT_DIR, task_id=task.task_id))
             task.input_path = input_video
-        _set(task, progress=42, message="正在生成随机视觉参数并处理合并后的视频")
-        output_path, effects, info = render_variant(
-            input_video=input_video,
-            output_dir=OUTPUT_DIR,
-            task_id=task.task_id,
-            options=task.options,
-            output_stem=safe_stem(task.original_filename),
-        )
+        variant_paths: list[str] = []
+        effects_by_version: dict[str, Any] = {}
+        info = None
+        total = max(1, min(task.output_count, 20))
+        for index in range(1, total + 1):
+            progress = 24 + int((index - 1) / total * 54)
+            _set(task, progress=progress, message=f"正在生成第 {index}/{total} 个视觉版本")
+            variant_task_id = f"{task.task_id}v{index:02d}"
+            output_path, effects, info = render_variant(
+                input_video=input_video,
+                output_dir=OUTPUT_DIR,
+                task_id=variant_task_id,
+                options=task.options,
+                output_stem=f"{safe_stem(task.original_filename)}_version_{index:02d}",
+            )
+            variant_paths.append(str(output_path))
+            effects_by_version[f"version_{index:02d}"] = effects
+
+        task.variant_paths = variant_paths
+        if total > 1:
+            _set(task, progress=84, message=f"正在把 {total} 个版本合并成最终下载视频")
+            final_path = merge_videos(input_paths=variant_paths, work_dir=OUTPUT_DIR, task_id=f"{task.task_id}_final")
+            final_output = OUTPUT_DIR / f"{safe_stem(task.original_filename)}_{total}_versions_final.mp4"
+            shutil.move(str(final_path), str(final_output))
+            output_path = final_output
+        else:
+            output_path = Path(variant_paths[0])
         task.video_info = info
-        task.effects = effects
+        task.effects = effects_by_version
         task.output_path = str(output_path)
         task.download_url = f"/api/download/{task.task_id}"
-        _set(task, status=TaskState.completed, progress=100, message="处理完成，可以下载新视频")
+        _set(task, status=TaskState.completed, progress=100, message=f"处理完成，已生成 {total} 个版本并合并为一个视频")
     except Exception as exc:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
@@ -110,6 +129,7 @@ async def upload_video(
     effect_texture: bool = Form(True),
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
+    output_count: int = Form(1),
 ) -> UploadResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="请选择视频文件。")
@@ -131,7 +151,8 @@ async def upload_video(
         effect_speed=effect_speed,
         effect_vignette=effect_vignette,
     )
-    task = VariantTask(task_id=task_id, original_filename=file.filename, input_path=str(input_path), options=options)
+    count = max(1, min(int(output_count or 1), 20))
+    task = VariantTask(task_id=task_id, original_filename=file.filename, input_path=str(input_path), options=options, output_count=count)
     TASKS[task_id] = task
     threading.Thread(target=_process, args=(task_id,), daemon=True).start()
     return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
@@ -147,6 +168,7 @@ async def upload_batch(
     effect_texture: bool = Form(True),
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
+    output_count: int = Form(1),
 ) -> BatchUploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
@@ -190,6 +212,7 @@ async def upload_batch(
         source_paths=source_paths,
         source_filenames=source_filenames,
         options=options,
+        output_count=max(1, min(int(output_count or 1), 20)),
     )
     TASKS[task_id] = task
     threading.Thread(target=_process, args=(task_id,), daemon=True).start()
