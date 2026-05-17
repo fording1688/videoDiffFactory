@@ -32,19 +32,21 @@ for directory in (UPLOAD_DIR, OUTPUT_DIR):
 
 TASKS: dict[str, VariantTask] = {}
 TASK_FUTURES: dict[str, Future] = {}
+BATCH_LIMITS: dict[str, threading.BoundedSemaphore] = {}
 TASK_LOCK = threading.RLock()
+DEFAULT_PARALLEL_JOBS = 3
 
 
-def _worker_count() -> int:
+def _worker_cap() -> int:
     try:
-        configured = int(os.getenv("VIDEO_VARIANT_MAX_WORKERS", "3") or "3")
+        configured = int(os.getenv("VIDEO_VARIANT_MAX_WORKERS", "8") or "8")
     except ValueError:
-        configured = 3
+        configured = 8
     return max(1, min(configured, 8))
 
 
-MAX_PARALLEL_JOBS = _worker_count()
-EXECUTOR = ThreadPoolExecutor(max_workers=MAX_PARALLEL_JOBS, thread_name_prefix="variant-worker")
+MAX_WORKER_CAP = _worker_cap()
+EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKER_CAP, thread_name_prefix="variant-worker")
 
 app = FastAPI(
     title="Video Variant Studio",
@@ -107,10 +109,18 @@ def _set(task: VariantTask, *, status: TaskState | None = None, progress: int | 
         TASKS[task.task_id] = task
 
 
+def _sanitize_worker_count(value: int | None) -> int:
+    try:
+        configured = int(value or DEFAULT_PARALLEL_JOBS)
+    except (TypeError, ValueError):
+        configured = DEFAULT_PARALLEL_JOBS
+    return max(1, min(configured, MAX_WORKER_CAP))
+
+
 def _submit_task(task_id: str) -> None:
     with TASK_LOCK:
         task = TASKS[task_id]
-    _set(task, status=TaskState.queued, progress=0, message=f"等待线程池调度，并发上限 {MAX_PARALLEL_JOBS} 个视频")
+    _set(task, status=TaskState.queued, progress=0, message=f"等待调度，本批线程数 {task.worker_count} 个视频")
     future = EXECUTOR.submit(_process, task_id)
     with TASK_LOCK:
         TASK_FUTURES[task_id] = future
@@ -143,6 +153,17 @@ def _version_info() -> dict[str, Any]:
 def _process(task_id: str) -> None:
     with TASK_LOCK:
         task = TASKS[task_id]
+        limiter = BATCH_LIMITS.get(task.batch_id)
+
+    if limiter is not None:
+        _set(task, status=TaskState.queued, progress=0, message=f"等待本批空闲线程，本批线程数 {task.worker_count}")
+        with limiter:
+            _render_task(task)
+    else:
+        _render_task(task)
+
+
+def _render_task(task: VariantTask) -> None:
     try:
         runtime = check_runtime()
         if not runtime.get("ok"):
@@ -195,7 +216,8 @@ def health() -> dict[str, Any]:
         "ok": True,
         "runtime": check_runtime(),
         "data_dir": str(DATA_DIR),
-        "max_parallel_jobs": MAX_PARALLEL_JOBS,
+        "default_parallel_jobs": DEFAULT_PARALLEL_JOBS,
+        "max_parallel_jobs": MAX_WORKER_CAP,
         "active_jobs": running_count,
         "pending_jobs": pending_count,
     }
@@ -217,6 +239,7 @@ async def upload_video(
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
     output_count: int = Form(1),
+    worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
 ) -> UploadResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="请选择视频文件。")
@@ -239,8 +262,21 @@ async def upload_video(
         effect_vignette=effect_vignette,
     )
     count = max(1, min(int(output_count or 1), 20))
-    task = VariantTask(task_id=task_id, original_filename=file.filename, input_path=str(input_path), options=options, output_count=count)
+    workers = _sanitize_worker_count(worker_count)
+    batch_id = uuid.uuid4().hex[:12]
+    task = VariantTask(
+        task_id=task_id,
+        original_filename=file.filename,
+        input_path=str(input_path),
+        source_paths=[str(input_path)],
+        source_filenames=[file.filename],
+        batch_id=batch_id,
+        worker_count=workers,
+        options=options,
+        output_count=count,
+    )
     with TASK_LOCK:
+        BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
         TASKS[task_id] = task
     _submit_task(task_id)
     return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
@@ -257,11 +293,16 @@ async def upload_batch(
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
     output_count: int = Form(1),
+    worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
 ) -> BatchUploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
 
     responses: list[UploadResponse] = []
+    workers = _sanitize_worker_count(worker_count)
+    batch_id = uuid.uuid4().hex[:12]
+    with TASK_LOCK:
+        BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
     for index, file in enumerate(files, start=1):
         if not file.filename:
             continue
@@ -287,6 +328,8 @@ async def upload_batch(
             input_path=str(input_path),
             source_paths=[str(input_path)],
             source_filenames=[file.filename],
+            batch_id=batch_id,
+            worker_count=workers,
             options=options,
             output_count=max(1, min(int(output_count or 1), 20)),
         )
@@ -305,7 +348,12 @@ async def upload_batch(
 def list_tasks() -> dict[str, Any]:
     with TASK_LOCK:
         tasks = list(TASKS.values())
-    return {"ok": True, "max_parallel_jobs": MAX_PARALLEL_JOBS, "tasks": [_dump(task) for task in tasks]}
+    return {
+        "ok": True,
+        "default_parallel_jobs": DEFAULT_PARALLEL_JOBS,
+        "max_parallel_jobs": MAX_WORKER_CAP,
+        "tasks": [_dump(task) for task in tasks],
+    }
 
 
 @app.get("/api/tasks/{task_id}")

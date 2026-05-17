@@ -60,6 +60,7 @@ form.addEventListener('submit', async (event) => {
     [...files].forEach(file => data.append('files', file));
     data.set('intensity', document.getElementById('intensity').value);
     data.set('output_count', document.getElementById('outputCount').value || '1');
+    data.set('worker_count', document.getElementById('workerCount').value || '3');
     ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette'].forEach(name => boolField(data, name));
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
@@ -116,6 +117,7 @@ function renderTasks() {
     const title = task.original_filename || task.task_id;
     const sourceText = task.source_filenames?.length ? `<p>源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
     const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，每个版本都会提供单独下载链接。</p>` : '';
+    const workerText = task.worker_count ? `<p>本批线程数：${task.worker_count}</p>` : '';
     const timingText = buildTimingText(task);
     const download = buildDownloadLinks(task, status);
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
@@ -129,6 +131,7 @@ function renderTasks() {
       <p>${escapeHtml(task.message || '等待处理')}</p>
       ${sourceText}
       ${versionText}
+      ${workerText}
       ${download}${error}
     </article>`;
   }).join('');

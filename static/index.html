@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260517-parallel-jobs" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260517-worker-input" />
 </head>
 <body>
   <main class="shell">
@@ -51,6 +51,13 @@
           </label>
         </div>
 
+        <div class="field-row">
+          <label>
+            线程数（同时处理几个视频）
+            <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
+          </label>
+        </div>
+
         <div class="switches">
           <label><input type="checkbox" name="effect_background" checked /> 模糊动态背景</label>
           <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
@@ -61,7 +68,7 @@
         </div>
 
         <button class="primary" type="submit">开始生成视觉版本</button>
-        <p class="hint">多选视频会分别独立处理，不会互相合并；系统默认最多同时处理 3 个视频，其余自动排队，避免 FFmpeg 把电脑打满。</p>
+        <p class="hint">多选视频会分别独立处理，不会互相合并；线程数默认 3，表示本批最多同时处理 3 个视频，其余自动排队。</p>
       </form>
 
       <section class="panel results">
@@ -73,6 +80,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=20260517-parallel-jobs"></script>
+  <script src="/static/app.js?v=20260517-worker-input"></script>
 </body>
 </html>
