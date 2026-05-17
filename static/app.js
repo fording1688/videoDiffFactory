@@ -2,6 +2,14 @@ const form = document.getElementById('uploadForm');
 const taskList = document.getElementById('taskList');
 const runtimeCard = document.getElementById('runtimeCard');
 const tasks = new Map();
+let isProcessing = false;
+
+function setSubmitLocked(locked, text = '') {
+  const button = form.querySelector('button');
+  isProcessing = locked;
+  button.disabled = locked;
+  button.textContent = text || (locked ? '正在生成，请稍等...' : '开始生成视觉版本');
+}
 
 async function checkRuntime() {
   try {
@@ -24,14 +32,13 @@ function boolField(formData, name) {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (isProcessing) return;
   const files = document.getElementById('videoFiles').files;
   if (!files.length) {
     alert('请先选择视频文件');
     return;
   }
-  const button = form.querySelector('button');
-  button.disabled = true;
-  button.textContent = '正在上传...';
+  setSubmitLocked(true, '正在上传并创建任务...');
   try {
     const data = new FormData();
     [...files].forEach(file => data.append('files', file));
@@ -45,9 +52,7 @@ form.addEventListener('submit', async (event) => {
     renderTasks();
   } catch (error) {
     alert('上传失败：' + (error.message || error));
-  } finally {
-    button.disabled = false;
-    button.textContent = '开始生成视觉版本';
+    setSubmitLocked(false);
   }
 });
 
@@ -63,6 +68,7 @@ async function pollTasks() {
     }
   }
   renderTasks();
+  refreshSubmitState();
 }
 
 function renderTasks() {
@@ -91,6 +97,15 @@ function renderTasks() {
       ${download}${error}
     </article>`;
   }).join('');
+}
+
+function refreshSubmitState() {
+  const activeTasks = [...tasks.values()].filter(task => !['completed', 'failed'].includes(task.status));
+  if (activeTasks.length) {
+    setSubmitLocked(true, '正在生成，请稍等...');
+  } else if (isProcessing) {
+    setSubmitLocked(false);
+  }
 }
 
 function escapeHtml(text) {
