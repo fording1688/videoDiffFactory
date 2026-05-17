@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import os
 import threading
 import traceback
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,20 @@ for directory in (UPLOAD_DIR, OUTPUT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 TASKS: dict[str, VariantTask] = {}
+TASK_FUTURES: dict[str, Future] = {}
+TASK_LOCK = threading.RLock()
+
+
+def _worker_count() -> int:
+    try:
+        configured = int(os.getenv("VIDEO_VARIANT_MAX_WORKERS", "3") or "3")
+    except ValueError:
+        configured = 3
+    return max(1, min(configured, 8))
+
+
+MAX_PARALLEL_JOBS = _worker_count()
+EXECUTOR = ThreadPoolExecutor(max_workers=MAX_PARALLEL_JOBS, thread_name_prefix="variant-worker")
 
 app = FastAPI(
     title="Video Variant Studio",
@@ -87,7 +103,17 @@ def _set(task: VariantTask, *, status: TaskState | None = None, progress: int | 
     if message is not None:
         task.message = message
     _update_timing(task)
-    TASKS[task.task_id] = task
+    with TASK_LOCK:
+        TASKS[task.task_id] = task
+
+
+def _submit_task(task_id: str) -> None:
+    with TASK_LOCK:
+        task = TASKS[task_id]
+    _set(task, status=TaskState.queued, progress=0, message=f"等待线程池调度，并发上限 {MAX_PARALLEL_JOBS} 个视频")
+    future = EXECUTOR.submit(_process, task_id)
+    with TASK_LOCK:
+        TASK_FUTURES[task_id] = future
 
 
 def _version_info() -> dict[str, Any]:
@@ -115,7 +141,8 @@ def _version_info() -> dict[str, Any]:
 
 
 def _process(task_id: str) -> None:
-    task = TASKS[task_id]
+    with TASK_LOCK:
+        task = TASKS[task_id]
     try:
         runtime = check_runtime()
         if not runtime.get("ok"):
@@ -161,7 +188,17 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "runtime": check_runtime(), "data_dir": str(DATA_DIR)}
+    with TASK_LOCK:
+        running_count = sum(1 for future in TASK_FUTURES.values() if future.running())
+        pending_count = sum(1 for future in TASK_FUTURES.values() if not future.done())
+    return {
+        "ok": True,
+        "runtime": check_runtime(),
+        "data_dir": str(DATA_DIR),
+        "max_parallel_jobs": MAX_PARALLEL_JOBS,
+        "active_jobs": running_count,
+        "pending_jobs": pending_count,
+    }
 
 
 @app.get("/api/version")
@@ -203,8 +240,9 @@ async def upload_video(
     )
     count = max(1, min(int(output_count or 1), 20))
     task = VariantTask(task_id=task_id, original_filename=file.filename, input_path=str(input_path), options=options, output_count=count)
-    TASKS[task_id] = task
-    threading.Thread(target=_process, args=(task_id,), daemon=True).start()
+    with TASK_LOCK:
+        TASKS[task_id] = task
+    _submit_task(task_id)
     return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
 
 
@@ -252,9 +290,10 @@ async def upload_batch(
             options=options,
             output_count=max(1, min(int(output_count or 1), 20)),
         )
-        TASKS[task_id] = task
+        with TASK_LOCK:
+            TASKS[task_id] = task
         responses.append(UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}"))
-        threading.Thread(target=_process, args=(task_id,), daemon=True).start()
+        _submit_task(task_id)
 
     if not responses:
         raise HTTPException(status_code=400, detail="没有读取到有效视频文件。")
@@ -264,12 +303,15 @@ async def upload_batch(
 
 @app.get("/api/tasks")
 def list_tasks() -> dict[str, Any]:
-    return {"ok": True, "tasks": [_dump(task) for task in TASKS.values()]}
+    with TASK_LOCK:
+        tasks = list(TASKS.values())
+    return {"ok": True, "max_parallel_jobs": MAX_PARALLEL_JOBS, "tasks": [_dump(task) for task in tasks]}
 
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str) -> dict[str, Any]:
-    task = TASKS.get(task_id)
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return _dump(task)

@@ -18,7 +18,9 @@ async function checkRuntime() {
     const ok = data.runtime && data.runtime.ok;
     runtimeCard.classList.toggle('bad', !ok);
     runtimeCard.querySelector('strong').textContent = ok ? '已就绪' : '缺 FFmpeg';
-    runtimeCard.querySelector('small').textContent = ok ? data.runtime.ffmpeg : (data.runtime.error || '请查看 README');
+    runtimeCard.querySelector('small').textContent = ok
+      ? `${data.runtime.ffmpeg} · 运行 ${data.active_jobs || 0}/${data.max_parallel_jobs || 1} · 待处理 ${data.pending_jobs || 0}`
+      : (data.runtime.error || '请查看 README');
   } catch (error) {
     runtimeCard.classList.add('bad');
     runtimeCard.querySelector('strong').textContent = '未启动';
