@@ -82,6 +82,9 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "brightness": round(rng.uniform(-0.018, 0.018), 3) if options.effect_color else 0,
         "hue": round(rng.uniform(-3.0, 3.0), 2) if options.effect_color else 0,
         "noise": rng.randint(noise_min, noise_max),
+        "audio_noise": round(rng.uniform(0.0012, 0.003), 4) if options.effect_texture else 0,
+        "audio_volume": round(rng.uniform(0.965, 0.995), 3),
+        "audio_lowpass": rng.randint(16800, 18800),
         "background_blur": rng.randint(blur_min, blur_max) if blur_max else 0,
         "foreground_width": 972 if options.effect_background else 1080,
         "foreground_height": 1728 if options.effect_background else 1920,
@@ -147,13 +150,24 @@ def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: Vi
     ]
     filter_complex = _video_filter(effects, include_texture=include_texture)
     if info.has_audio:
+        filter_complex += (
+            f";[0:a]aresample=44100,atempo={effects['speed']},"
+            f"volume={effects['audio_volume']},highpass=f=35,"
+            f"lowpass=f={effects['audio_lowpass']}[a0];"
+            f"[1:a]volume={effects['audio_noise']}[noise];"
+            f"[a0][noise]amix=inputs=2:duration=first:dropout_transition=0[a]"
+        )
         command += [
+            "-f",
+            "lavfi",
+            "-i",
+            "anoisesrc=color=pink:sample_rate=44100",
             "-filter_complex",
             filter_complex,
             "-map",
             "[v]",
             "-map",
-            "0:a?",
+            "[a]",
             "-shortest",
         ]
     else:
@@ -171,6 +185,40 @@ def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: Vi
             "-shortest",
         ]
     command += [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "22",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        str(temp_path),
+    ]
+    _run(command)
+
+
+def _render_with_original_audio(input_path: Path, temp_path: Path, effects: dict[str, Any], info: VideoInfo, *, include_texture: bool) -> None:
+    command = [
+        ffmpeg_bin(),
+        "-y",
+        "-fflags",
+        "+discardcorrupt",
+        "-i",
+        str(input_path),
+        "-filter_complex",
+        _video_filter(effects, include_texture=include_texture),
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-shortest",
         "-c:v",
         "libx264",
         "-preset",
@@ -211,7 +259,15 @@ def render_variant(
     except Exception:
         if temp_path.exists():
             temp_path.unlink()
-        _render(input_path, temp_path, effects, info, include_texture=False)
+        try:
+            _render(input_path, temp_path, effects, info, include_texture=False)
+        except Exception:
+            if temp_path.exists():
+                temp_path.unlink()
+            if info.has_audio:
+                _render_with_original_audio(input_path, temp_path, effects, info, include_texture=False)
+            else:
+                raise
 
     shutil.move(str(temp_path), str(output_path))
     return output_path, effects, info
