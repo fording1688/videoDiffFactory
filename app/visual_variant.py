@@ -83,8 +83,8 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "hue": round(rng.uniform(-3.0, 3.0), 2) if options.effect_color else 0,
         "noise": rng.randint(noise_min, noise_max),
         "background_blur": rng.randint(blur_min, blur_max) if blur_max else 0,
-        "foreground_width": 970 if options.effect_background else 1080,
-        "foreground_height": 1724 if options.effect_background else 1920,
+        "foreground_width": 972 if options.effect_background else 1080,
+        "foreground_height": 1728 if options.effect_background else 1920,
         "effect_background": options.effect_background,
         "effect_zoom": options.effect_zoom,
         "effect_color": options.effect_color,
@@ -112,7 +112,8 @@ def _video_filter(effects: dict[str, Any], *, include_texture: bool = True) -> s
             f"crop=1080:1920,gblur=sigma={blur},"
             f"eq=saturation={saturation}:contrast={contrast}:brightness={brightness},"
             f"hue=h={hue},fps=30,setsar=1[bgv];"
-            f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease,"
+            f"[fg]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=increase,"
+            f"crop={foreground_width}:{foreground_height},"
             f"eq=saturation={saturation}:contrast={contrast}:brightness={brightness},"
             f"hue=h={hue},fps=30,setsar=1[fgv];"
             f"[bgv][fgv]overlay=(W-w)/2+{effects['x_offset']}:(H-h)/2+{effects['y_offset']}"
@@ -146,14 +147,14 @@ def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: Vi
     ]
     filter_complex = _video_filter(effects, include_texture=include_texture)
     if info.has_audio:
-        filter_complex += f";[0:a]atempo={effects['speed']},volume=0.98[a]"
         command += [
             "-filter_complex",
             filter_complex,
             "-map",
             "[v]",
             "-map",
-            "[a]",
+            "0:a?",
+            "-shortest",
         ]
     else:
         command += [
