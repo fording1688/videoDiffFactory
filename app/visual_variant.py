@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import random
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Union
 
+from .cancel import CancelledTask, is_cancel_requested, run_cancellable
 from .models import VariantOptions, VideoInfo
 from .video_utils import ffmpeg_bin, get_video_info
 
 
-def _run(command: list[str]) -> None:
-    result = subprocess.run(command, capture_output=True, text=True)
+def _run(command: list[str], *, task_id: str | None = None) -> None:
+    result = run_cancellable(command, task_id=task_id)
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"FFmpeg 执行失败，code={result.returncode}: {stderr[-1600:]}")
@@ -94,10 +94,18 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "effect_texture": options.effect_texture,
         "scratch_x_offset": rng.randint(-8, 8),
         "scratch_alpha": round(rng.uniform(0.18, 0.34), 3),
-        "sweep_width": rng.randint(170, 260),
-        "sweep_alpha": round(rng.uniform(0.10, 0.18), 3),
-        "sweep_speed": round(rng.uniform(0.75, 1.25), 3),
-        "film_grain": rng.randint(6, 12),
+        "sweep_direction": rng.choice(["left-to-right", "top-to-bottom", "diagonal"]),
+        "sweep_speed_name": (sweep_speed_name := rng.choice(["slow", "medium", "fast"])),
+        "sweep_velocity": int({"slow": 170, "medium": 285, "fast": 430}[sweep_speed_name] * rng.uniform(0.95, 1.05)),
+        "sweep_opacity_pct": rng.randint(10, 40),
+        "sweep_width_pct": rng.randint(10, 30),
+        "sweep_blur": rng.randint(20, 80),
+        "sweep_color": rng.choice(["white", "gold", "blue"]),
+        "film_grain_intensity_pct": (grain_intensity := rng.randint(3, 15)),
+        "film_grain_size": (grain_size := rng.choice(["small", "medium"])),
+        "film_grain_opacity_pct": (grain_opacity := rng.randint(5, 20)),
+        "film_grain_dynamic": True,
+        "film_grain": max(1, int(grain_intensity * (grain_opacity / 20) * (1.0 if grain_size == "small" else 1.35))),
         "effect_speed": options.effect_speed,
         "effect_vignette": options.effect_vignette,
         "effect_center_scratch": options.effect_center_scratch,
@@ -105,6 +113,48 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "effect_film_grain": options.effect_film_grain,
     }
 
+
+
+
+def _alpha(percent: int | float, multiplier: float = 1.0) -> float:
+    return round(max(0.0, min(1.0, float(percent) / 100 * multiplier)), 3)
+
+
+def _light_sweep_filters(effects: dict[str, Any]) -> list[str]:
+    color_map = {
+        "white": "white",
+        "gold": "0xFFD166",
+        "blue": "0x60A5FA",
+    }
+    color = color_map.get(str(effects.get("sweep_color", "white")), "white")
+    direction = str(effects.get("sweep_direction", "left-to-right"))
+    velocity = max(80, int(effects.get("sweep_velocity", 285)))
+    width = max(108, min(324, int(1080 * float(effects.get("sweep_width_pct", 18)) / 100)))
+    blur = max(20, min(80, int(effects.get("sweep_blur", 40))))
+    alpha = _alpha(effects.get("sweep_opacity_pct", 18))
+    soft_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.34)
+    haze_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.14)
+
+    filters: list[str] = []
+    if direction == "top-to-bottom":
+        y = f"mod(t*{velocity}\,ih+{width + blur * 2})-{width + blur * 2}"
+        filters.append(f"drawbox=x=0:y={y}-{blur}:w=iw:h={width + blur * 2}:color={color}@{haze_alpha}:t=fill")
+        filters.append(f"drawbox=x=0:y={y}:w=iw:h={width}:color={color}@{alpha}:t=fill")
+        filters.append(f"drawbox=x=0:y={y}-{blur}:w=iw:h={blur}:color={color}@{soft_alpha}:t=fill")
+        filters.append(f"drawbox=x=0:y={y}+{width}:w=iw:h={blur}:color={color}@{soft_alpha}:t=fill")
+        return filters
+
+    x = f"mod(t*{velocity}\,iw+{width + blur * 2})-{width + blur * 2}"
+    filters.append(f"drawbox=x={x}-{blur}:y=0:w={width + blur * 2}:h=ih:color={color}@{haze_alpha}:t=fill")
+    filters.append(f"drawbox=x={x}:y=0:w={width}:h=ih:color={color}@{alpha}:t=fill")
+    filters.append(f"drawbox=x={x}-{blur}:y=0:w={blur}:h=ih:color={color}@{soft_alpha}:t=fill")
+    filters.append(f"drawbox=x={x}+{width}:y=0:w={blur}:h=ih:color={color}@{soft_alpha}:t=fill")
+
+    if direction == "diagonal":
+        y = f"mod(t*{max(80, int(velocity * 1.78))}\,ih+{width + blur * 2})-{width + blur * 2}"
+        cross_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.42)
+        filters.append(f"drawbox=x=0:y={y}:w=iw:h={max(20, width // 2)}:color={color}@{cross_alpha}:t=fill")
+    return filters
 
 def _video_filter(effects: dict[str, Any], *, include_texture: bool = True) -> str:
     zoom = effects["zoom"]
@@ -153,23 +203,14 @@ def _video_filter(effects: dict[str, Any], *, include_texture: bool = True) -> s
             f"drawbox=x={scratch_x}-5:y=0:w=12:h=ih:color=white@0.035:t=fill"
         )
     if include_texture and effects.get("effect_light_sweep"):
-        sweep_width = effects["sweep_width"]
-        sweep_alpha = effects["sweep_alpha"]
-        sweep_speed = effects["sweep_speed"]
-        sweep_x = f"mod(t*360*{sweep_speed},w+{sweep_width * 2})-{sweep_width * 2}"
-        texture_filters.append(
-            f"drawbox=x={sweep_x}:y=0:w={sweep_width}:h=ih:color=white@{sweep_alpha}:t=fill"
-        )
-        texture_filters.append(
-            f"drawbox=x={sweep_x}+{sweep_width}:y=0:w={max(30, sweep_width // 4)}:h=ih:color=white@0.06:t=fill"
-        )
+        texture_filters.extend(_light_sweep_filters(effects))
     if include_texture and effects.get("effect_vignette"):
         texture_filters.append("vignette=PI/7")
     suffix = "," + ",".join(texture_filters) if texture_filters else ""
     return f"{base}{suffix},format=yuv420p[v]"
 
 
-def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: VideoInfo, *, include_texture: bool) -> None:
+def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: VideoInfo, *, include_texture: bool, cancel_task_id: str | None = None) -> None:
     command = [
         ffmpeg_bin(),
         "-y",
@@ -231,10 +272,10 @@ def _render(input_path: Path, temp_path: Path, effects: dict[str, Any], info: Vi
         "+faststart",
         str(temp_path),
     ]
-    _run(command)
+    _run(command, task_id=cancel_task_id)
 
 
-def _render_with_original_audio(input_path: Path, temp_path: Path, effects: dict[str, Any], info: VideoInfo, *, include_texture: bool) -> None:
+def _render_with_original_audio(input_path: Path, temp_path: Path, effects: dict[str, Any], info: VideoInfo, *, include_texture: bool, cancel_task_id: str | None = None) -> None:
     command = [
         ffmpeg_bin(),
         "-y",
@@ -265,7 +306,7 @@ def _render_with_original_audio(input_path: Path, temp_path: Path, effects: dict
         "+faststart",
         str(temp_path),
     ]
-    _run(command)
+    _run(command, task_id=cancel_task_id)
 
 
 def render_variant(
@@ -275,6 +316,7 @@ def render_variant(
     task_id: str,
     options: VariantOptions,
     output_stem: str,
+    cancel_task_id: str | None = None,
 ) -> tuple[Path, dict[str, Any], VideoInfo]:
     input_path = Path(input_video)
     output_root = Path(output_dir)
@@ -285,17 +327,25 @@ def render_variant(
     effects = build_effects(task_id, options)
 
     try:
-        _render(input_path, temp_path, effects, info, include_texture=True)
+        _render(input_path, temp_path, effects, info, include_texture=True, cancel_task_id=cancel_task_id or task_id)
+    except CancelledTask:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
     except Exception:
         if temp_path.exists():
             temp_path.unlink()
         try:
-            _render(input_path, temp_path, effects, info, include_texture=False)
+            _render(input_path, temp_path, effects, info, include_texture=False, cancel_task_id=cancel_task_id or task_id)
+        except CancelledTask:
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
         except Exception:
             if temp_path.exists():
                 temp_path.unlink()
             if info.has_audio:
-                _render_with_original_audio(input_path, temp_path, effects, info, include_texture=False)
+                _render_with_original_audio(input_path, temp_path, effects, info, include_texture=False, cancel_task_id=cancel_task_id or task_id)
             else:
                 raise
 
@@ -376,12 +426,16 @@ def merge_videos(
             "2",
             str(normalized),
         ]
-        _run(command)
+        if is_cancel_requested(task_id):
+            raise CancelledTask("任务已取消。")
+        _run(command, task_id=task_id)
         normalized_paths.append(normalized)
 
     concat_file = root / "concat.txt"
     concat_file.write_text("\n".join(_quote_concat_path(path) for path in normalized_paths), encoding="utf-8")
     merged_path = root / f"{task_id}_merged.mp4"
+    if is_cancel_requested(task_id):
+        raise CancelledTask("任务已取消。")
     _run(
         [
             ffmpeg_bin(),
@@ -397,7 +451,8 @@ def merge_videos(
             "-movflags",
             "+faststart",
             str(merged_path),
-        ]
+        ],
+        task_id=task_id,
     )
     return merged_path
 
@@ -499,7 +554,9 @@ def split_video_by_random_range(
             "+faststart",
             str(output_path),
         ]
-        _run(command)
+        if is_cancel_requested(task_id):
+            raise CancelledTask("任务已取消。")
+        _run(command, task_id=task_id)
         results.append({"path": str(output_path), "start": round(cursor, 3), "duration": round(duration, 3)})
         cursor = round(cursor + duration, 3)
     return results

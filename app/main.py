@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .cancel import CancelledTask, clear_cancel, is_cancel_requested, request_cancel
 from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem
 from .visual_variant import merge_videos, render_variant, split_video_by_random_range
@@ -86,7 +87,7 @@ def _update_timing(task: VariantTask) -> None:
             task.estimated_total_seconds = task.elapsed_seconds
         return
 
-    if task.status == TaskState.failed:
+    if task.status in {TaskState.failed, TaskState.cancelled}:
         task.completed_at = task.completed_at or now
         task.remaining_seconds = None
         return
@@ -121,6 +122,7 @@ def _sanitize_worker_count(value: int | None) -> int:
 def _submit_task(task_id: str) -> None:
     with TASK_LOCK:
         task = TASKS[task_id]
+    clear_cancel(task_id)
     _set(task, status=TaskState.queued, progress=0, message=f"等待调度，本批线程数 {task.worker_count} 个视频")
     future = EXECUTOR.submit(_process, task_id)
     with TASK_LOCK:
@@ -156,10 +158,17 @@ def _process(task_id: str) -> None:
         task = TASKS[task_id]
         limiter = BATCH_LIMITS.get(task.batch_id)
 
+    if task.cancel_requested or is_cancel_requested(task_id):
+        _set(task, status=TaskState.cancelled, progress=task.progress, message="任务已停止")
+        return
+
     renderer = _render_task if task.operation == "variant" else _render_tool_task
     if limiter is not None:
         _set(task, status=TaskState.queued, progress=0, message=f"等待本批空闲线程，本批线程数 {task.worker_count}")
         with limiter:
+            if task.cancel_requested or is_cancel_requested(task_id):
+                _set(task, status=TaskState.cancelled, progress=task.progress, message="任务已停止")
+                return
             renderer(task)
     else:
         renderer(task)
@@ -177,6 +186,8 @@ def _render_task(task: VariantTask) -> None:
         info = None
         total = max(1, min(task.output_count, 20))
         for index in range(1, total + 1):
+            if task.cancel_requested or is_cancel_requested(task.task_id):
+                raise CancelledTask("任务已取消。")
             progress = 12 + int((index - 1) / total * 78)
             _set(task, progress=progress, message=f"正在生成第 {index}/{total} 个视觉版本")
             variant_task_id = f"{task.task_id}v{index:02d}"
@@ -186,6 +197,7 @@ def _render_task(task: VariantTask) -> None:
                 task_id=variant_task_id,
                 options=task.options,
                 output_stem=f"{safe_stem(task.original_filename)}_version_{index:02d}",
+                cancel_task_id=task.task_id,
             )
             variant_paths.append(str(output_path))
             effects_by_version[f"version_{index:02d}"] = effects
@@ -198,6 +210,9 @@ def _render_task(task: VariantTask) -> None:
         task.output_path = str(output_path)
         task.download_url = task.variant_download_urls[0] if len(task.variant_download_urls) == 1 else None
         _set(task, status=TaskState.completed, progress=100, message=f"处理完成，已生成 {total} 个独立版本")
+    except CancelledTask:
+        task.cancel_requested = True
+        _set(task, status=TaskState.cancelled, progress=task.progress, message="任务已停止")
     except Exception as exc:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
@@ -256,6 +271,9 @@ def _render_tool_task(task: VariantTask) -> None:
             return
 
         raise RuntimeError(f"未知任务类型：{task.operation}")
+    except CancelledTask:
+        task.cancel_requested = True
+        _set(task, status=TaskState.cancelled, progress=task.progress, message="任务已停止")
     except Exception as exc:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
@@ -523,6 +541,25 @@ def get_task(task_id: str) -> dict[str, Any]:
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return _dump(task)
+
+
+@app.post("/api/tasks/{task_id}/cancel")
+def cancel_task(task_id: str) -> dict[str, Any]:
+    with TASK_LOCK:
+        task = TASKS.get(task_id)
+        future = TASK_FUTURES.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在。")
+    if task.status in {TaskState.completed, TaskState.failed, TaskState.cancelled}:
+        return {"ok": True, "task": _dump(task)}
+
+    task.cancel_requested = True
+    request_cancel(task_id)
+    if future is not None and future.cancel():
+        _set(task, status=TaskState.cancelled, progress=task.progress, message="任务已停止")
+    else:
+        _set(task, progress=task.progress, message="正在停止任务...")
+    return {"ok": True, "task": _dump(task)}
 
 
 @app.get("/api/download/{task_id}")

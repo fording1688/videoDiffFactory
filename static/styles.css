@@ -394,3 +394,23 @@ input[type="text"] {
   .tool-menu, .switches, .two-col { grid-template-columns: 1fr; }
   h1 { font-size: 34px; }
 }
+
+.task-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.danger-button {
+  border: 1px solid #f0b7b7;
+  border-radius: 9px;
+  padding: 9px 12px;
+  color: #9f2424;
+  background: #fff5f5;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.danger-button:hover {
+  background: #ffe8e8;
+}

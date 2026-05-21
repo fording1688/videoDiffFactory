@@ -145,7 +145,7 @@ splitForm.addEventListener('submit', async (event) => {
 
 async function pollTasks() {
   for (const [id, current] of tasks.entries()) {
-    if (current.status === 'completed' || current.status === 'failed') continue;
+    if (isTerminalStatus(current.status)) continue;
     try {
       const res = await fetch(`/api/tasks/${id}`);
       const task = await res.json();
@@ -191,6 +191,7 @@ function renderTasks() {
     const timingText = buildTimingText(task);
     const download = buildDownloadLinks(task, status);
     const error = task.error ? `<p class="error">${escapeHtml(task.error)}</p>` : '';
+    const actions = buildTaskActions(task);
     return `<article class="task">
       <div class="task-header"><div class="task-title">${escapeHtml(title)}</div><span class="badge">${escapeHtml(status)}</span></div>
       <div class="progress"><i style="width:${progress}%"></i></div>
@@ -202,9 +203,37 @@ function renderTasks() {
       ${sourceText}
       ${versionText}
       ${workerText}
+      ${actions}
       ${download}${error}
     </article>`;
   }).join('');
+}
+
+
+function isTerminalStatus(status) {
+  return ['completed', 'failed', 'cancelled'].includes(status);
+}
+
+function buildTaskActions(task) {
+  if (isTerminalStatus(task.status)) return '';
+  return `<div class="task-actions"><button class="danger-button" type="button" onclick="cancelTask('${escapeHtml(task.task_id)}')">停止任务</button></div>`;
+}
+
+async function cancelTask(taskId) {
+  const current = tasks.get(taskId);
+  if (current) {
+    tasks.set(taskId, { ...current, cancel_requested: true, message: '正在停止任务...' });
+    renderTasks();
+  }
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/cancel`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    const payload = await res.json();
+    if (payload.task) tasks.set(taskId, payload.task);
+    renderTasks();
+  } catch (error) {
+    alert('停止任务失败：' + (error.message || error));
+  }
 }
 
 function buildTaskTitle(task) {

@@ -12,6 +12,7 @@ class TaskState(str, Enum):
     processing = "processing"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class VideoInfo(BaseModel):
@@ -43,6 +44,7 @@ class VariantTask(BaseModel):
     progress: int = 0
     message: str = "等待处理"
     operation: str = "variant"
+    cancel_requested: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
