@@ -322,6 +322,9 @@ async def upload_video(
     effect_texture: bool = Form(True),
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
+    effect_center_scratch: bool = Form(True),
+    effect_light_sweep: bool = Form(True),
+    effect_film_grain: bool = Form(True),
     output_count: int = Form(1),
     worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
 ) -> UploadResponse:
@@ -344,6 +347,9 @@ async def upload_video(
         effect_texture=effect_texture,
         effect_speed=effect_speed,
         effect_vignette=effect_vignette,
+        effect_center_scratch=effect_center_scratch,
+        effect_light_sweep=effect_light_sweep,
+        effect_film_grain=effect_film_grain,
     )
     count = max(1, min(int(output_count or 1), 20))
     workers = _sanitize_worker_count(worker_count)
@@ -440,6 +446,9 @@ async def upload_batch(
     effect_texture: bool = Form(True),
     effect_speed: bool = Form(True),
     effect_vignette: bool = Form(True),
+    effect_center_scratch: bool = Form(True),
+    effect_light_sweep: bool = Form(True),
+    effect_film_grain: bool = Form(True),
     output_count: int = Form(1),
     worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
 ) -> BatchUploadResponse:
@@ -469,6 +478,9 @@ async def upload_batch(
             effect_texture=effect_texture,
             effect_speed=effect_speed,
             effect_vignette=effect_vignette,
+            effect_center_scratch=effect_center_scratch,
+            effect_light_sweep=effect_light_sweep,
+            effect_film_grain=effect_film_grain,
         )
         task = VariantTask(
             task_id=task_id,

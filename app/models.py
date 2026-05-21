@@ -32,6 +32,9 @@ class VariantOptions(BaseModel):
     effect_texture: bool = True
     effect_speed: bool = True
     effect_vignette: bool = True
+    effect_center_scratch: bool = True
+    effect_light_sweep: bool = True
+    effect_film_grain: bool = True
 
 
 class VariantTask(BaseModel):

@@ -86,7 +86,7 @@ form.addEventListener('submit', async (event) => {
     data.set('intensity', document.getElementById('intensity').value);
     data.set('output_count', document.getElementById('outputCount').value || '1');
     data.set('worker_count', document.getElementById('workerCount').value || '3');
-    ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette'].forEach(name => boolField(data, name));
+    ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette', 'effect_center_scratch', 'effect_light_sweep', 'effect_film_grain'].forEach(name => boolField(data, name));
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
     const payload = await res.json();

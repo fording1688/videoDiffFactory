@@ -92,8 +92,17 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "effect_zoom": options.effect_zoom,
         "effect_color": options.effect_color,
         "effect_texture": options.effect_texture,
+        "scratch_x_offset": rng.randint(-8, 8),
+        "scratch_alpha": round(rng.uniform(0.18, 0.34), 3),
+        "sweep_width": rng.randint(170, 260),
+        "sweep_alpha": round(rng.uniform(0.10, 0.18), 3),
+        "sweep_speed": round(rng.uniform(0.75, 1.25), 3),
+        "film_grain": rng.randint(6, 12),
         "effect_speed": options.effect_speed,
         "effect_vignette": options.effect_vignette,
+        "effect_center_scratch": options.effect_center_scratch,
+        "effect_light_sweep": options.effect_light_sweep,
+        "effect_film_grain": options.effect_film_grain,
     }
 
 
@@ -133,6 +142,27 @@ def _video_filter(effects: dict[str, Any], *, include_texture: bool = True) -> s
     texture_filters = []
     if include_texture and effects.get("effect_texture") and effects.get("noise", 0) > 0:
         texture_filters.append(f"noise=alls={effects['noise']}:allf=t+u")
+    if include_texture and effects.get("effect_film_grain"):
+        texture_filters.append(f"noise=alls={effects['film_grain']}:allf=t+u")
+    if include_texture and effects.get("effect_center_scratch"):
+        scratch_x = f"(w/2)+{effects['scratch_x_offset']}"
+        texture_filters.append(
+            f"drawbox=x={scratch_x}:y=0:w=2:h=ih:color=white@{effects['scratch_alpha']}:t=fill"
+        )
+        texture_filters.append(
+            f"drawbox=x={scratch_x}-5:y=0:w=12:h=ih:color=white@0.035:t=fill"
+        )
+    if include_texture and effects.get("effect_light_sweep"):
+        sweep_width = effects["sweep_width"]
+        sweep_alpha = effects["sweep_alpha"]
+        sweep_speed = effects["sweep_speed"]
+        sweep_x = f"mod(t*360*{sweep_speed},w+{sweep_width * 2})-{sweep_width * 2}"
+        texture_filters.append(
+            f"drawbox=x={sweep_x}:y=0:w={sweep_width}:h=ih:color=white@{sweep_alpha}:t=fill"
+        )
+        texture_filters.append(
+            f"drawbox=x={sweep_x}+{sweep_width}:y=0:w={max(30, sweep_width // 4)}:h=ih:color=white@0.06:t=fill"
+        )
     if include_texture and effects.get("effect_vignette"):
         texture_filters.append("vignette=PI/7")
     suffix = "," + ",".join(texture_filters) if texture_filters else ""
