@@ -13,6 +13,8 @@
 - 自动随机生成安全范围内的视觉参数
 - 输出 1080x1920 竖屏 MP4
 - 每个输出版本都会提供单独下载链接
+- 独立合并多个视频，按选择顺序输出一个 MP4
+- 独立切分大视频，可输入类似 `50-56` 的随机秒数范围，按顺序切完整个视频
 - 本地运行，上传和输出都保存在本机 `data/` 目录
 
 ## 一键启动 macOS
@@ -51,6 +53,25 @@ VIDEO_VARIANT_MAX_WORKERS=6 ./run_mac.command
 ```txt
 run_windows.bat
 ```
+
+## 合并和切分
+
+页面上新增了两个独立工具区：
+
+- `合并视频`：选择两个或多个视频，系统会按选择顺序标准化并合并成一个 MP4。
+- `切分视频`：选择一个大视频，输入随机秒数范围，例如 `50-56`，系统会从头到尾按 50 到 56 秒之间的随机长度依次切分，并提供每个片段下载和 ZIP 整包下载。
+
+对应接口：
+
+```bash
+POST /api/merge
+POST /api/split
+GET /api/download/{task_id}
+GET /api/download/{task_id}/variants/{index}
+GET /api/download/{task_id}/package
+```
+
+注意：为了完整切完视频，最后一个片段可能短于输入范围。
 
 ## FFmpeg
 

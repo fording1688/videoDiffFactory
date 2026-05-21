@@ -1,14 +1,39 @@
 const form = document.getElementById('uploadForm');
+const mergeForm = document.getElementById('mergeForm');
+const splitForm = document.getElementById('splitForm');
 const taskList = document.getElementById('taskList');
 const runtimeCard = document.getElementById('runtimeCard');
 const tasks = new Map();
+const menuItems = document.querySelectorAll('.menu-item');
+const toolViews = document.querySelectorAll('[data-view-panel]');
 let isProcessing = false;
+
+
+function activateView(viewId) {
+  menuItems.forEach(item => item.classList.toggle('active', item.dataset.view === viewId));
+  toolViews.forEach(view => view.classList.toggle('active', view.dataset.viewPanel === viewId));
+}
+
+menuItems.forEach(item => {
+  item.addEventListener('click', () => activateView(item.dataset.view));
+});
 
 function setSubmitLocked(locked, text = '') {
   const button = form.querySelector('button');
   isProcessing = locked;
   button.disabled = locked;
   button.textContent = text || (locked ? '正在生成，请稍等...' : '开始生成视觉版本');
+}
+
+function setFormLocked(targetForm, locked, textWhenLocked, textWhenReady) {
+  const button = targetForm.querySelector('button[type="submit"]');
+  button.disabled = locked;
+  button.textContent = locked ? textWhenLocked : textWhenReady;
+}
+
+function addCreatedTask(payload, message) {
+  tasks.set(payload.task_id, { task_id: payload.task_id, status_url: payload.status_url, message });
+  renderTasks();
 }
 
 async function checkRuntime() {
@@ -67,9 +92,54 @@ form.addEventListener('submit', async (event) => {
     const payload = await res.json();
     payload.tasks.forEach(task => tasks.set(task.task_id, { task_id: task.task_id, status_url: task.status_url, message: '已创建独立处理任务' }));
     renderTasks();
+    setSubmitLocked(false);
   } catch (error) {
     alert('上传失败：' + (error.message || error));
     setSubmitLocked(false);
+  }
+});
+
+
+mergeForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const files = document.getElementById('mergeFiles').files;
+  if (files.length < 2) {
+    alert('请至少选择两个视频进行合并');
+    return;
+  }
+  setFormLocked(mergeForm, true, '正在上传合并任务...', '合并视频');
+  try {
+    const data = new FormData();
+    [...files].forEach(file => data.append('files', file));
+    const res = await fetch('/api/merge', { method: 'POST', body: data });
+    if (!res.ok) throw new Error(await res.text());
+    addCreatedTask(await res.json(), '已创建合并任务');
+  } catch (error) {
+    alert('合并任务创建失败：' + (error.message || error));
+  } finally {
+    setFormLocked(mergeForm, false, '正在上传合并任务...', '合并视频');
+  }
+});
+
+splitForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const file = document.getElementById('splitFile').files[0];
+  if (!file) {
+    alert('请先选择要切分的视频');
+    return;
+  }
+  setFormLocked(splitForm, true, '正在上传切分任务...', '切分视频');
+  try {
+    const data = new FormData();
+    data.append('file', file);
+    data.set('segment_range', document.getElementById('segmentRange').value || '50-56');
+    const res = await fetch('/api/split', { method: 'POST', body: data });
+    if (!res.ok) throw new Error(await res.text());
+    addCreatedTask(await res.json(), '已创建切分任务');
+  } catch (error) {
+    alert('切分任务创建失败：' + (error.message || error));
+  } finally {
+    setFormLocked(splitForm, false, '正在上传切分任务...', '切分视频');
   }
 });
 
@@ -114,9 +184,9 @@ function renderTasks() {
   taskList.innerHTML = list.map(task => {
     const progress = task.progress || 0;
     const status = task.status || 'queued';
-    const title = task.original_filename || task.task_id;
+    const title = buildTaskTitle(task);
     const sourceText = task.source_filenames?.length ? `<p>源视频：${escapeHtml(task.source_filenames.join(' / '))}</p>` : '';
-    const versionText = task.output_count > 1 ? `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，每个版本都会提供单独下载链接。</p>` : '';
+    const versionText = buildVersionText(task);
     const workerText = task.worker_count ? `<p>本批线程数：${task.worker_count}</p>` : '';
     const timingText = buildTimingText(task);
     const download = buildDownloadLinks(task, status);
@@ -137,18 +207,37 @@ function renderTasks() {
   }).join('');
 }
 
+function buildTaskTitle(task) {
+  const base = task.original_filename || task.task_id;
+  if (task.operation === 'merge') return `合并视频：${base}`;
+  if (task.operation === 'split') return `切分视频：${base}`;
+  return base;
+}
+
+function buildVersionText(task) {
+  if (task.operation === 'split') {
+    return `<p>切分片段：${task.variant_paths?.length || 0} 个，支持单独下载和整包下载。</p>`;
+  }
+  if (task.output_count > 1) {
+    return `<p>生成版本：${task.variant_paths?.length || 0}/${task.output_count}，每个版本都会提供单独下载链接。</p>`;
+  }
+  return '';
+}
+
 function buildDownloadLinks(task, status) {
   if (status !== 'completed') return '';
+  const packageLink = task.package_url ? `<a href="${task.package_url}">下载全部分段 ZIP</a>` : '';
   const urls = task.variant_download_urls || [];
   if (urls.length) {
-    return `<div class="download-list">${urls.map((url, index) => {
+    return `<div class="download-list">${packageLink}${urls.map((url, index) => {
       const path = task.variant_paths?.[index] || '';
       const name = path.split('/').pop() || `版本 ${index + 1}`;
-      return `<a href="${url}">下载版本 ${index + 1}：${escapeHtml(name)}</a>`;
+      const label = task.operation === 'split' ? `下载片段 ${index + 1}` : `下载版本 ${index + 1}`;
+      return `<a href="${url}">${label}：${escapeHtml(name)}</a>`;
     }).join('')}</div>`;
   }
   if (task.download_url) {
-    return `<div class="download-list"><a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a></div>`;
+    return `<div class="download-list">${packageLink}<a href="${task.download_url}">下载 ${escapeHtml(task.output_path?.split('/').pop() || 'MP4')}</a></div>`;
   }
   return '';
 }
@@ -173,12 +262,7 @@ function formatDuration(value) {
 }
 
 function refreshSubmitState() {
-  const activeTasks = [...tasks.values()].filter(task => !['completed', 'failed'].includes(task.status));
-  if (activeTasks.length) {
-    setSubmitLocked(true, '正在生成，请稍等...');
-  } else if (isProcessing) {
-    setSubmitLocked(false);
-  }
+  if (isProcessing) setSubmitLocked(false);
 }
 
 function escapeHtml(text) {

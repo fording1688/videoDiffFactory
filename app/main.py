@@ -6,6 +6,7 @@ import os
 import threading
 import traceback
 import uuid
+import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -17,8 +18,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
-from .video_utils import app_root, asset_root, check_runtime, safe_stem
-from .visual_variant import render_variant
+from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem
+from .visual_variant import merge_videos, render_variant, split_video_by_random_range
 
 
 APP_ROOT = app_root()
@@ -155,12 +156,13 @@ def _process(task_id: str) -> None:
         task = TASKS[task_id]
         limiter = BATCH_LIMITS.get(task.batch_id)
 
+    renderer = _render_task if task.operation == "variant" else _render_tool_task
     if limiter is not None:
         _set(task, status=TaskState.queued, progress=0, message=f"等待本批空闲线程，本批线程数 {task.worker_count}")
         with limiter:
-            _render_task(task)
+            renderer(task)
     else:
-        _render_task(task)
+        renderer(task)
 
 
 def _render_task(task: VariantTask) -> None:
@@ -200,6 +202,88 @@ def _render_task(task: VariantTask) -> None:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
         _set(task, status=TaskState.failed, progress=100, message="处理失败")
+
+
+def _zip_outputs(zip_path: Path, paths: list[Path]) -> Path:
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file_path in paths:
+            if file_path.exists():
+                archive.write(file_path, file_path.name)
+    return zip_path
+
+
+def _render_tool_task(task: VariantTask) -> None:
+    try:
+        runtime = check_runtime()
+        if not runtime.get("ok"):
+            raise RuntimeError(str(runtime.get("error") or "FFmpeg runtime missing"))
+
+        if task.operation == "merge":
+            _set(task, status=TaskState.processing, progress=15, message="正在按选择顺序合并视频")
+            output_path = merge_videos(input_paths=task.source_paths, work_dir=OUTPUT_DIR, task_id=task.task_id)
+            task.output_path = str(output_path)
+            task.download_url = f"/api/download/{task.task_id}"
+            task.video_info = get_video_info(output_path)
+            task.effects = {"operation": "merge", "source_count": len(task.source_paths)}
+            _set(task, status=TaskState.completed, progress=100, message=f"合并完成，共 {len(task.source_paths)} 个视频")
+            return
+
+        if task.operation == "split":
+            min_seconds = float(task.tool_options.get("min_seconds", 50))
+            max_seconds = float(task.tool_options.get("max_seconds", 56))
+            _set(task, status=TaskState.processing, progress=15, message=f"正在按 {min_seconds:g}-{max_seconds:g} 秒随机切分视频")
+            parts = split_video_by_random_range(
+                input_video=task.input_path,
+                output_dir=OUTPUT_DIR,
+                task_id=task.task_id,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                output_stem=safe_stem(task.original_filename),
+            )
+            paths = [Path(item["path"]) for item in parts]
+            task.variant_paths = [str(path) for path in paths]
+            task.variant_download_urls = [f"/api/download/{task.task_id}/variants/{index}" for index in range(1, len(paths) + 1)]
+            task.output_path = str(paths[0]) if paths else None
+            task.video_info = get_video_info(task.input_path)
+            task.effects = {"operation": "split", "segments": parts, "range": [min_seconds, max_seconds]}
+            package_path = OUTPUT_DIR / f"{task.task_id}_split_parts.zip"
+            _zip_outputs(package_path, paths)
+            task.package_path = str(package_path)
+            task.package_url = f"/api/download/{task.task_id}/package"
+            _set(task, status=TaskState.completed, progress=100, message=f"切分完成，共 {len(paths)} 个片段")
+            return
+
+        raise RuntimeError(f"未知任务类型：{task.operation}")
+    except Exception as exc:
+        task.error = str(exc)
+        task.effects["traceback"] = traceback.format_exc(limit=6)
+        _set(task, status=TaskState.failed, progress=100, message="处理失败")
+
+
+def _validate_video_upload(file: UploadFile) -> str:
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="请选择视频文件。")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".m4v", ".avi", ".webm"}:
+        raise HTTPException(status_code=400, detail=f"{file.filename} 格式不支持。")
+    return suffix
+
+
+def _parse_split_range(value: str) -> tuple[float, float]:
+    cleaned = (value or "").strip().replace("，", "-").replace(",", "-").replace("~", "-")
+    parts = [part.strip() for part in cleaned.split("-") if part.strip()]
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="切分时间请输入类似 50-56 的格式。")
+    try:
+        min_seconds = float(parts[0])
+        max_seconds = float(parts[1])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="切分时间必须是数字，例如 50-56。") from exc
+    if min_seconds <= 0 or max_seconds <= 0 or min_seconds > max_seconds:
+        raise HTTPException(status_code=400, detail="切分时间范围无效，最小值必须大于 0 且不能超过最大值。")
+    return min_seconds, max_seconds
 
 
 @app.get("/")
@@ -277,6 +361,70 @@ async def upload_video(
     )
     with TASK_LOCK:
         BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
+        TASKS[task_id] = task
+    _submit_task(task_id)
+    return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
+
+
+@app.post("/api/merge", response_model=UploadResponse)
+async def merge_uploaded_videos(files: list[UploadFile] = File(...)) -> UploadResponse:
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="请至少选择两个视频进行合并。")
+
+    task_id = uuid.uuid4().hex[:12]
+    source_paths: list[str] = []
+    source_filenames: list[str] = []
+    for index, file in enumerate(files, start=1):
+        suffix = _validate_video_upload(file)
+        input_path = UPLOAD_DIR / f"{task_id}_merge_{index:03d}_{safe_stem(file.filename)}{suffix}"
+        with input_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        source_paths.append(str(input_path))
+        source_filenames.append(file.filename or input_path.name)
+
+    task = VariantTask(
+        task_id=task_id,
+        operation="merge",
+        original_filename="合并视频",
+        input_path=source_paths[0],
+        source_paths=source_paths,
+        source_filenames=source_filenames,
+        batch_id=uuid.uuid4().hex[:12],
+        worker_count=1,
+        output_count=1,
+    )
+    with TASK_LOCK:
+        TASKS[task_id] = task
+    _submit_task(task_id)
+    return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
+
+
+@app.post("/api/split", response_model=UploadResponse)
+async def split_uploaded_video(
+    file: UploadFile = File(...),
+    segment_range: str = Form("50-56"),
+) -> UploadResponse:
+    suffix = _validate_video_upload(file)
+    min_seconds, max_seconds = _parse_split_range(segment_range)
+
+    task_id = uuid.uuid4().hex[:12]
+    input_path = UPLOAD_DIR / f"{task_id}_split_{safe_stem(file.filename)}{suffix}"
+    with input_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    task = VariantTask(
+        task_id=task_id,
+        operation="split",
+        original_filename=file.filename or input_path.name,
+        input_path=str(input_path),
+        source_paths=[str(input_path)],
+        source_filenames=[file.filename or input_path.name],
+        batch_id=uuid.uuid4().hex[:12],
+        worker_count=1,
+        output_count=1,
+        tool_options={"min_seconds": min_seconds, "max_seconds": max_seconds},
+    )
+    with TASK_LOCK:
         TASKS[task_id] = task
     _submit_task(task_id)
     return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
@@ -377,6 +525,17 @@ def download(task_id: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="输出文件已不存在。")
     return FileResponse(path, filename=path.name, media_type="video/mp4")
+
+
+@app.get("/api/download/{task_id}/package")
+def download_package(task_id: str) -> FileResponse:
+    task = TASKS.get(task_id)
+    if not task or not task.package_path:
+        raise HTTPException(status_code=404, detail="整包文件不存在。")
+    path = Path(task.package_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="整包文件已不存在。")
+    return FileResponse(path, media_type="application/zip", filename=path.name)
 
 
 @app.get("/api/download/{task_id}/variants/{index}")

@@ -370,3 +370,106 @@ def merge_videos(
         ]
     )
     return merged_path
+
+
+
+def _segment_lengths(total_seconds: float, min_seconds: float, max_seconds: float, seed: str) -> list[float]:
+    rng = random.Random(seed)
+    total = max(0.0, float(total_seconds))
+    low = max(1.0, float(min_seconds))
+    high = max(low, float(max_seconds))
+    if total <= 0:
+        return []
+    if total <= high:
+        return [round(total, 3)]
+
+    min_count = int((total + high - 0.000001) // high)
+    if total % high:
+        min_count += 1
+    max_count = int(total // low)
+
+    if min_count <= max_count and max_count > 0:
+        count = rng.randint(min_count, max_count)
+        lengths: list[float] = []
+        remaining = total
+        for index in range(count):
+            left = count - index
+            if left == 1:
+                length = remaining
+            else:
+                min_allowed = max(low, remaining - high * (left - 1))
+                max_allowed = min(high, remaining - low * (left - 1))
+                length = rng.uniform(min_allowed, max_allowed)
+            length = round(length, 3)
+            lengths.append(length)
+            remaining = round(remaining - length, 3)
+        if lengths and abs(sum(lengths) - total) > 0.01:
+            lengths[-1] = round(lengths[-1] + total - sum(lengths), 3)
+        return lengths
+
+    lengths = []
+    remaining = total
+    while remaining > 0.001:
+        if remaining <= high:
+            lengths.append(round(remaining, 3))
+            break
+        length = round(rng.uniform(low, high), 3)
+        lengths.append(length)
+        remaining = round(remaining - length, 3)
+    return lengths
+
+
+def split_video_by_random_range(
+    *,
+    input_video: Union[str, Path],
+    output_dir: Union[str, Path],
+    task_id: str,
+    min_seconds: float,
+    max_seconds: float,
+    output_stem: str,
+) -> list[dict[str, Any]]:
+    input_path = Path(input_video)
+    output_root = Path(output_dir) / f"{task_id}_split"
+    output_root.mkdir(parents=True, exist_ok=True)
+    info = get_video_info(input_path)
+    lengths = _segment_lengths(info.duration, min_seconds, max_seconds, task_id)
+    if not lengths:
+        raise ValueError("视频时长无效，无法切分。")
+
+    results: list[dict[str, Any]] = []
+    cursor = 0.0
+    for index, duration in enumerate(lengths, start=1):
+        output_path = output_root / f"{output_stem}_part_{index:03d}_{int(round(duration))}s.mp4"
+        command = [
+            ffmpeg_bin(),
+            "-y",
+            "-ss",
+            f"{cursor:.3f}",
+            "-i",
+            str(input_path),
+            "-t",
+            f"{duration:.3f}",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        _run(command)
+        results.append({"path": str(output_path), "start": round(cursor, 3), "duration": round(duration, 3)})
+        cursor = round(cursor + duration, 3)
+    return results

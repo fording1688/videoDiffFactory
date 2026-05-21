@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260517-worker-input" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260520-clean" />
 </head>
 <body>
   <main class="shell">
@@ -22,54 +22,106 @@
       </div>
     </section>
 
-    <section class="grid">
-      <form class="panel uploader" id="uploadForm">
-        <div class="section-title">
-          <p class="eyebrow">VISUAL VARIANT</p>
-          <h2>上传视频</h2>
-        </div>
-        <label class="drop-zone">
-          <span>选择一个或多个 MP4 / MOV / AVI</span>
-          <input id="videoFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
-        </label>
+    <section class="workspace">
+      <aside class="tool-menu panel" aria-label="功能菜单">
+        <button class="menu-item active" type="button" data-view="variantView">
+          <span>处理视频</span>
+          <small>生成视觉差异化版本</small>
+        </button>
+        <button class="menu-item" type="button" data-view="mergeView">
+          <span>合并视频</span>
+          <small>多个素材按顺序合成一个</small>
+        </button>
+        <button class="menu-item" type="button" data-view="splitView">
+          <span>切分视频</span>
+          <small>按随机秒数范围完整切段</small>
+        </button>
+      </aside>
 
-        <div class="field-row">
-          <label>
-            处理强度
-            <select id="intensity" name="intensity">
-              <option value="light">轻微</option>
-              <option value="balanced" selected>均衡推荐</option>
-              <option value="strong">明显</option>
-            </select>
+      <section class="tool-stage">
+        <form class="panel uploader tool-view active" id="uploadForm" data-view-panel="variantView">
+          <div class="section-title">
+            <p class="eyebrow">VISUAL VARIANT</p>
+            <h2>处理视频</h2>
+            <p class="tool-copy">上传一个或多个素材，为每个视频独立生成视觉差异化版本。</p>
+          </div>
+          <label class="drop-zone">
+            <span>选择一个或多个 MP4 / MOV / AVI</span>
+            <input id="videoFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
           </label>
-        </div>
 
-        <div class="field-row">
-          <label>
-            生成版本数量
-            <input id="outputCount" name="output_count" type="number" min="1" max="20" value="3" />
-          </label>
-        </div>
+          <div class="field-row">
+            <label>
+              处理强度
+              <select id="intensity" name="intensity">
+                <option value="light">轻微</option>
+                <option value="balanced" selected>均衡推荐</option>
+                <option value="strong">明显</option>
+              </select>
+            </label>
+          </div>
 
-        <div class="field-row">
-          <label>
-            线程数（同时处理几个视频）
-            <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
-          </label>
-        </div>
+          <div class="field-row two-col">
+            <label>
+              生成版本数量
+              <input id="outputCount" name="output_count" type="number" min="1" max="20" value="3" />
+            </label>
+            <label>
+              线程数
+              <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
+            </label>
+          </div>
 
-        <div class="switches">
-          <label><input type="checkbox" name="effect_background" checked /> 模糊动态背景</label>
-          <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
-          <label><input type="checkbox" name="effect_color" checked /> 色彩微调</label>
-          <label><input type="checkbox" name="effect_texture" checked /> 质感噪点</label>
-          <label><input type="checkbox" name="effect_speed" checked /> 微变速</label>
-          <label><input type="checkbox" name="effect_vignette" checked /> 暗角层</label>
-        </div>
+          <div class="switches">
+            <label><input type="checkbox" name="effect_background" checked /> 模糊动态背景</label>
+            <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
+            <label><input type="checkbox" name="effect_color" checked /> 色彩微调</label>
+            <label><input type="checkbox" name="effect_texture" checked /> 质感噪点</label>
+            <label><input type="checkbox" name="effect_speed" checked /> 微变速</label>
+            <label><input type="checkbox" name="effect_vignette" checked /> 暗角层</label>
+          </div>
 
-        <button class="primary" type="submit">开始生成视觉版本</button>
-        <p class="hint">多选视频会分别独立处理，不会互相合并；线程数默认 3，表示本批最多同时处理 3 个视频，其余自动排队。</p>
-      </form>
+          <button class="primary" type="submit">开始生成视觉版本</button>
+          <p class="hint">多选视频会分别独立处理，不会互相合并；线程数表示本批最多同时处理几个视频。</p>
+        </form>
+
+        <section class="panel uploader tool-view" id="mergeView" data-view-panel="mergeView">
+          <div class="section-title">
+            <p class="eyebrow">MERGE</p>
+            <h2>合并视频</h2>
+            <p class="tool-copy">选择两个或多个视频，系统会按选择顺序输出一个合并后的 MP4。</p>
+          </div>
+          <form id="mergeForm" class="mini-form">
+            <label class="drop-zone">
+              <span>选择多个视频，按选择顺序合并</span>
+              <input id="mergeFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+            </label>
+            <button class="primary" type="submit">合并视频</button>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="splitView" data-view-panel="splitView">
+          <div class="section-title">
+            <p class="eyebrow">SPLIT</p>
+            <h2>切分视频</h2>
+            <p class="tool-copy">选择一个大视频，按输入的随机秒数范围，从头到尾完整切分。</p>
+          </div>
+          <form id="splitForm" class="mini-form">
+            <label class="drop-zone">
+              <span>选择一个大视频</span>
+              <input id="splitFile" name="file" type="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+            </label>
+            <div class="field-row">
+              <label>
+                随机片段秒数范围
+                <input id="segmentRange" name="segment_range" type="text" value="50-56" placeholder="例如 50-56" />
+              </label>
+            </div>
+            <button class="primary" type="submit">切分视频</button>
+            <p class="hint">例如输入 50-56，会按 50 到 56 秒之间的随机长度，按顺序切完整个视频。最后一个片段可能略短。</p>
+          </form>
+        </section>
+      </section>
 
       <section class="panel results">
         <div class="section-title">
@@ -80,6 +132,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=20260517-worker-input"></script>
+  <script src="/static/app.js?v=20260520-clean"></script>
 </body>
 </html>

@@ -39,6 +39,7 @@ class VariantTask(BaseModel):
     status: TaskState = TaskState.queued
     progress: int = 0
     message: str = "等待处理"
+    operation: str = "variant"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -57,6 +58,9 @@ class VariantTask(BaseModel):
     variant_download_urls: list[str] = Field(default_factory=list)
     output_path: Optional[str] = None
     download_url: Optional[str] = None
+    package_path: Optional[str] = None
+    package_url: Optional[str] = None
+    tool_options: dict[str, Any] = Field(default_factory=dict)
     options: VariantOptions = Field(default_factory=VariantOptions)
     video_info: Optional[VideoInfo] = None
     effects: dict[str, Any] = Field(default_factory=dict)
