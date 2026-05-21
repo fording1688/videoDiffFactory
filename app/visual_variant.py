@@ -97,9 +97,9 @@ def build_effects(task_id: str, options: VariantOptions) -> dict[str, Any]:
         "sweep_direction": rng.choice(["left-to-right", "top-to-bottom", "diagonal"]),
         "sweep_speed_name": (sweep_speed_name := rng.choice(["slow", "medium", "fast"])),
         "sweep_velocity": int({"slow": 170, "medium": 285, "fast": 430}[sweep_speed_name] * rng.uniform(0.95, 1.05)),
-        "sweep_opacity_pct": rng.randint(10, 40),
-        "sweep_width_pct": rng.randint(10, 30),
-        "sweep_blur": rng.randint(20, 80),
+        "sweep_opacity_pct": rng.randint(10, 18),
+        "sweep_line_width": rng.randint(3, 6),
+        "sweep_glow_width": rng.randint(8, 16),
         "sweep_color": rng.choice(["white", "gold", "blue"]),
         "film_grain_intensity_pct": (grain_intensity := rng.randint(3, 15)),
         "film_grain_size": (grain_size := rng.choice(["small", "medium"])),
@@ -129,32 +129,23 @@ def _light_sweep_filters(effects: dict[str, Any]) -> list[str]:
     color = color_map.get(str(effects.get("sweep_color", "white")), "white")
     direction = str(effects.get("sweep_direction", "left-to-right"))
     velocity = max(80, int(effects.get("sweep_velocity", 285)))
-    width = max(108, min(324, int(1080 * float(effects.get("sweep_width_pct", 18)) / 100)))
-    blur = max(20, min(80, int(effects.get("sweep_blur", 40))))
-    alpha = _alpha(effects.get("sweep_opacity_pct", 18))
-    soft_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.34)
-    haze_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.14)
+    line_width = max(1, min(8, int(effects.get("sweep_line_width", 3))))
+    glow_width = max(line_width + 4, min(28, int(effects.get("sweep_glow_width", 14))))
+    alpha = _alpha(effects.get("sweep_opacity_pct", 10))
+    glow_alpha = _alpha(effects.get("sweep_opacity_pct", 10), 0.12)
 
-    filters: list[str] = []
     if direction == "top-to-bottom":
-        y = f"mod(t*{velocity}\,ih+{width + blur * 2})-{width + blur * 2}"
-        filters.append(f"drawbox=x=0:y={y}-{blur}:w=iw:h={width + blur * 2}:color={color}@{haze_alpha}:t=fill")
-        filters.append(f"drawbox=x=0:y={y}:w=iw:h={width}:color={color}@{alpha}:t=fill")
-        filters.append(f"drawbox=x=0:y={y}-{blur}:w=iw:h={blur}:color={color}@{soft_alpha}:t=fill")
-        filters.append(f"drawbox=x=0:y={y}+{width}:w=iw:h={blur}:color={color}@{soft_alpha}:t=fill")
-        return filters
+        y = f"mod(t*{velocity}\,ih+{glow_width * 2})-{glow_width * 2}"
+        return [
+            f"drawbox=x=0:y={y}:w=iw:h={glow_width}:color={color}@{glow_alpha}:t=fill",
+            f"drawbox=x=0:y={y}+{max(0, (glow_width - line_width) // 2)}:w=iw:h={line_width}:color={color}@{alpha}:t=fill",
+        ]
 
-    x = f"mod(t*{velocity}\,iw+{width + blur * 2})-{width + blur * 2}"
-    filters.append(f"drawbox=x={x}-{blur}:y=0:w={width + blur * 2}:h=ih:color={color}@{haze_alpha}:t=fill")
-    filters.append(f"drawbox=x={x}:y=0:w={width}:h=ih:color={color}@{alpha}:t=fill")
-    filters.append(f"drawbox=x={x}-{blur}:y=0:w={blur}:h=ih:color={color}@{soft_alpha}:t=fill")
-    filters.append(f"drawbox=x={x}+{width}:y=0:w={blur}:h=ih:color={color}@{soft_alpha}:t=fill")
-
-    if direction == "diagonal":
-        y = f"mod(t*{max(80, int(velocity * 1.78))}\,ih+{width + blur * 2})-{width + blur * 2}"
-        cross_alpha = _alpha(effects.get("sweep_opacity_pct", 18), 0.42)
-        filters.append(f"drawbox=x=0:y={y}:w=iw:h={max(20, width // 2)}:color={color}@{cross_alpha}:t=fill")
-    return filters
+    x = f"mod(t*{velocity}\,iw+{glow_width * 2})-{glow_width * 2}"
+    return [
+        f"drawbox=x={x}:y=0:w={glow_width}:h=ih:color={color}@{glow_alpha}:t=fill",
+        f"drawbox=x={x}+{max(0, (glow_width - line_width) // 2)}:y=0:w={line_width}:h=ih:color={color}@{alpha}:t=fill",
+    ]
 
 def _video_filter(effects: dict[str, Any], *, include_texture: bool = True) -> str:
     zoom = effects["zoom"]
