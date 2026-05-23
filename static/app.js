@@ -1,6 +1,7 @@
 const form = document.getElementById('uploadForm');
 const mergeForm = document.getElementById('mergeForm');
 const splitForm = document.getElementById('splitForm');
+const dramaForm = document.getElementById('dramaForm');
 const taskList = document.getElementById('taskList');
 const runtimeCard = document.getElementById('runtimeCard');
 const tasks = new Map();
@@ -143,6 +144,35 @@ splitForm.addEventListener('submit', async (event) => {
   }
 });
 
+if (dramaForm) {
+  dramaForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = document.getElementById('dramaFile').files[0];
+    if (!file) {
+      alert('Please choose a raw drama video first.');
+      return;
+    }
+    setFormLocked(dramaForm, true, 'Creating short drama factory task...', 'Create Short Drama MVP');
+    try {
+      const data = new FormData();
+      data.append('file', file);
+      data.set('max_clips', document.getElementById('dramaMaxClips').value || '3');
+      data.set('min_seconds', document.getElementById('dramaMinSeconds').value || '15');
+      data.set('max_seconds', document.getElementById('dramaMaxSeconds').value || '35');
+      data.set('versions_per_clip', document.getElementById('dramaVersions').value || '5');
+      data.set('worker_count', '1');
+      data.set('whisper_model', document.getElementById('dramaWhisperModel').value || 'base');
+      const res = await fetch('/api/drama-factory', { method: 'POST', body: data });
+      if (!res.ok) throw new Error(await res.text());
+      addCreatedTask(await res.json(), 'Short drama factory task created');
+    } catch (error) {
+      alert('Short drama task failed: ' + (error.message || error));
+    } finally {
+      setFormLocked(dramaForm, false, 'Creating short drama factory task...', 'Create Short Drama MVP');
+    }
+  });
+}
+
 async function pollTasks() {
   for (const [id, current] of tasks.entries()) {
     if (isTerminalStatus(current.status)) continue;
@@ -240,10 +270,17 @@ function buildTaskTitle(task) {
   const base = task.original_filename || task.task_id;
   if (task.operation === 'merge') return `合并视频：${base}`;
   if (task.operation === 'split') return `切分视频：${base}`;
+  if (task.operation === 'drama_factory') return `Short Drama Factory: ${base}`;
   return base;
 }
 
 function buildVersionText(task) {
+  if (task.operation === 'drama_factory') {
+    const clipCount = task.effects?.clip_count || 0;
+    const outputCount = task.variant_paths?.length || 0;
+    const source = task.effects?.transcript_source || 'pending';
+    return `<p>Short drama MVP: ${outputCount}/${task.output_count || 0} videos, ${clipCount} high-emotion clips, transcript=${escapeHtml(source)}.</p>`;
+  }
   if (task.operation === 'split') {
     return `<p>切分片段：${task.variant_paths?.length || 0} 个，支持单独下载和整包下载。</p>`;
   }

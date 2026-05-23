@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cancel import CancelledTask, clear_cancel, is_cancel_requested, request_cancel
+from .drama_factory import options_from_tool_options, render_drama_factory
 from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem
 from .visual_variant import merge_videos, render_variant, split_video_by_random_range
@@ -245,6 +246,33 @@ def _render_tool_task(task: VariantTask) -> None:
             _set(task, status=TaskState.completed, progress=100, message=f"合并完成，共 {len(task.source_paths)} 个视频")
             return
 
+        if task.operation == "drama_factory":
+            options = options_from_tool_options(task.tool_options)
+            _set(task, status=TaskState.processing, progress=12, message="Detecting high-emotion drama clips")
+            paths, metadata_path, metadata = render_drama_factory(
+                input_video=task.input_path,
+                output_dir=OUTPUT_DIR,
+                task_id=task.task_id,
+                options=options,
+            )
+            task.variant_paths = [str(path) for path in paths]
+            task.variant_download_urls = [f"/api/download/{task.task_id}/variants/{index}" for index in range(1, len(paths) + 1)]
+            task.output_path = str(paths[0]) if paths else None
+            task.video_info = get_video_info(task.input_path)
+            task.effects = {
+                "operation": "drama_factory",
+                "metadata_path": str(metadata_path),
+                "clip_count": len(metadata.get("clips", [])),
+                "output_count": len(paths),
+                "transcript_source": metadata.get("transcript_source"),
+            }
+            package_path = OUTPUT_DIR / f"{task.task_id}_short_drama_factory.zip"
+            _zip_outputs(package_path, [*paths, metadata_path])
+            task.package_path = str(package_path)
+            task.package_url = f"/api/download/{task.task_id}/package"
+            _set(task, status=TaskState.completed, progress=100, message=f"Short drama factory completed: {len(paths)} videos")
+            return
+
         if task.operation == "split":
             min_seconds = float(task.tool_options.get("min_seconds", 50))
             max_seconds = float(task.tool_options.get("max_seconds", 56))
@@ -447,6 +475,48 @@ async def split_uploaded_video(
         worker_count=1,
         output_count=1,
         tool_options={"min_seconds": min_seconds, "max_seconds": max_seconds},
+    )
+    with TASK_LOCK:
+        TASKS[task_id] = task
+    _submit_task(task_id)
+    return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
+
+
+@app.post("/api/drama-factory", response_model=UploadResponse)
+async def short_drama_factory(
+    file: UploadFile = File(...),
+    max_clips: int = Form(3),
+    min_seconds: float = Form(15),
+    max_seconds: float = Form(35),
+    versions_per_clip: int = Form(5),
+    worker_count: int = Form(1),
+    whisper_model: str = Form("base"),
+) -> UploadResponse:
+    suffix = _validate_video_upload(file)
+    task_id = uuid.uuid4().hex[:12]
+    input_path = UPLOAD_DIR / f"{task_id}_drama_{safe_stem(file.filename)}{suffix}"
+    with input_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    safe_max_clips = max(1, min(int(max_clips or 1), 10))
+    safe_versions = max(1, min(int(versions_per_clip or 1), 5))
+    task = VariantTask(
+        task_id=task_id,
+        operation="drama_factory",
+        original_filename=file.filename or input_path.name,
+        input_path=str(input_path),
+        source_paths=[str(input_path)],
+        source_filenames=[file.filename or input_path.name],
+        batch_id=uuid.uuid4().hex[:12],
+        worker_count=_sanitize_worker_count(worker_count),
+        output_count=safe_max_clips * safe_versions,
+        tool_options={
+            "max_clips": safe_max_clips,
+            "min_seconds": max(5, float(min_seconds or 15)),
+            "max_seconds": max(6, float(max_seconds or 35)),
+            "versions_per_clip": safe_versions,
+            "whisper_model": whisper_model or "base",
+        },
     )
     with TASK_LOCK:
         TASKS[task_id] = task

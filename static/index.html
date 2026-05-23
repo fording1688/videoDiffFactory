@@ -36,6 +36,10 @@
           <span>切分视频</span>
           <small>按随机秒数范围完整切段</small>
         </button>
+        <button class="menu-item" type="button" data-view="dramaView">
+          <span>Short Drama</span>
+          <small>Find emotional clips and render viral versions</small>
+        </button>
       </aside>
 
       <section class="tool-stage">
@@ -122,6 +126,48 @@
             </div>
             <button class="primary" type="submit">切分视频</button>
             <p class="hint">例如输入 50-56，会按 50 到 56 秒之间的随机长度，按顺序切完整个视频。最后一个片段可能略短。</p>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="dramaView" data-view-panel="dramaView">
+          <div class="section-title">
+            <p class="eyebrow">SHORT DRAMA MVP</p>
+            <h2>Short Drama Video Factory</h2>
+            <p class="tool-copy">Upload one raw drama video. The MVP detects high-emotion moments, cuts 15-35 second clips, and renders five hook angles per clip with metadata.</p>
+          </div>
+          <form id="dramaForm" class="mini-form">
+            <label class="drop-zone">
+              <span>Choose one raw drama MP4 / MOV / AVI</span>
+              <input id="dramaFile" name="file" type="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+            </label>
+            <div class="field-row two-col">
+              <label>
+                Max high-emotion clips
+                <input id="dramaMaxClips" name="max_clips" type="number" min="1" max="10" value="3" />
+              </label>
+              <label>
+                Versions per clip
+                <input id="dramaVersions" name="versions_per_clip" type="number" min="1" max="5" value="5" />
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label>
+                Minimum seconds
+                <input id="dramaMinSeconds" name="min_seconds" type="number" min="5" max="35" value="15" />
+              </label>
+              <label>
+                Maximum seconds
+                <input id="dramaMaxSeconds" name="max_seconds" type="number" min="6" max="60" value="35" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                Whisper model
+                <input id="dramaWhisperModel" name="whisper_model" type="text" value="base" />
+              </label>
+            </div>
+            <button class="primary" type="submit">Create Short Drama MVP</button>
+            <p class="hint">If a sidecar JSON/SRT/VTT transcript is present beside the source file on disk, it will be used. Otherwise the task uses local Whisper when installed, then falls back to evenly sampled candidate clips.</p>
           </form>
         </section>
       </section>
