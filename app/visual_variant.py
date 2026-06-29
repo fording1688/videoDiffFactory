@@ -26,6 +26,25 @@ def _even(value: float) -> int:
     return number if number % 2 == 0 else number - 1
 
 
+def _mp4_compat_args() -> list[str]:
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "22",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+    ]
+
+
 def _profile_ranges(intensity: str) -> dict[str, Any]:
     if intensity == "light":
         return {

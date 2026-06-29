@@ -1,4 +1,5 @@
 const form = document.getElementById('uploadForm');
+const downloadForm = document.getElementById('downloadForm');
 const mergeForm = document.getElementById('mergeForm');
 const splitForm = document.getElementById('splitForm');
 const dramaForm = document.getElementById('dramaForm');
@@ -99,6 +100,50 @@ form.addEventListener('submit', async (event) => {
     setSubmitLocked(false);
   }
 });
+
+
+if (downloadForm) {
+  downloadForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const url = document.getElementById('downloadUrl').value.trim();
+    if (!url) {
+      alert('请先粘贴视频分享链接');
+      return;
+    }
+    setFormLocked(downloadForm, true, '正在解析并下载...', '下载视频');
+    try {
+      const cookiesBrowser = document.getElementById('downloadCookiesBrowser').value;
+      const proxy = document.getElementById('downloadProxy').value.trim();
+      const allowPlaylist = document.getElementById('downloadAllowPlaylist').checked;
+      const maxDownloads = document.getElementById('downloadMaxDownloads').value || '30';
+      const body = { url, allow_playlist: allowPlaylist, max_downloads: Number(maxDownloads) };
+      if (cookiesBrowser) body.cookies_browser = cookiesBrowser;
+      if (proxy) body.proxy = proxy;
+      const res = await fetch('/api/download-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const payload = await res.json();
+      tasks.set(payload.task_id, {
+        task_id: payload.task_id,
+        status_url: payload.status_url,
+        status: 'queued',
+        progress: 0,
+        operation: 'download',
+        original_filename: url,
+        message: '已创建下载任务',
+      });
+      renderTasks();
+      pollTasks();
+    } catch (error) {
+      alert('下载失败：' + (error.message || error));
+    } finally {
+      setFormLocked(downloadForm, false, '正在解析并下载...', '下载视频');
+    }
+  });
+}
 
 
 mergeForm.addEventListener('submit', async (event) => {
@@ -268,6 +313,7 @@ async function cancelTask(taskId) {
 
 function buildTaskTitle(task) {
   const base = task.original_filename || task.task_id;
+  if (task.operation === 'download') return `下载视频：${base}`;
   if (task.operation === 'merge') return `合并视频：${base}`;
   if (task.operation === 'split') return `切分视频：${base}`;
   if (task.operation === 'drama_factory') return `Short Drama Factory: ${base}`;
@@ -275,6 +321,13 @@ function buildTaskTitle(task) {
 }
 
 function buildVersionText(task) {
+  if (task.operation === 'download') {
+    const title = task.effects?.title ? `标题：${escapeHtml(task.effects.title)}` : '已保存到本地素材目录。';
+    const extractor = task.effects?.extractor ? ` · 来源：${escapeHtml(task.effects.extractor)}` : '';
+    const duration = task.effects?.duration ? ` · 时长：${formatDuration(task.effects.duration)}` : '';
+    const count = task.effects?.download_count ? ` · 文件数：${task.effects.download_count}` : '';
+    return `<p>${title}${extractor}${duration}${count}</p>`;
+  }
   if (task.operation === 'drama_factory') {
     const clipCount = task.effects?.clip_count || 0;
     const outputCount = task.variant_paths?.length || 0;
@@ -298,7 +351,7 @@ function buildDownloadLinks(task, status) {
     return `<div class="download-list">${packageLink}${urls.map((url, index) => {
       const path = task.variant_paths?.[index] || '';
       const name = path.split('/').pop() || `版本 ${index + 1}`;
-      const label = task.operation === 'split' ? `下载片段 ${index + 1}` : `下载版本 ${index + 1}`;
+      const label = task.operation === 'split' ? `下载片段 ${index + 1}` : task.operation === 'download' ? `下载视频 ${index + 1}` : `下载版本 ${index + 1}`;
       return `<a href="${url}">${label}：${escapeHtml(name)}</a>`;
     }).join('')}</div>`;
   }
@@ -333,6 +386,16 @@ function refreshSubmitState() {
 
 function escapeHtml(text) {
   return String(text || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+async function readError(res) {
+  const text = await res.text();
+  try {
+    const data = JSON.parse(text);
+    return data.detail || text;
+  } catch (error) {
+    return text;
+  }
 }
 
 checkRuntime();

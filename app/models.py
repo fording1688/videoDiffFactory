@@ -81,3 +81,23 @@ class UploadResponse(BaseModel):
 class BatchUploadResponse(BaseModel):
     ok: bool = True
     tasks: list[UploadResponse]
+
+
+class DownloadUrlRequest(BaseModel):
+    url: str
+    cookies_browser: Optional[str] = None
+    proxy: Optional[str] = None
+    allow_playlist: bool = False
+    max_downloads: Optional[int] = None
+
+
+class DownloadUrlResponse(BaseModel):
+    ok: bool = True
+    task_id: str
+    status_url: str
+    download_url: str
+    filename: str
+    filepath: str
+    title: str = ""
+    duration: Optional[float] = None
+    extractor: str = ""

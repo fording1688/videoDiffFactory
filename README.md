@@ -16,6 +16,7 @@
 - 正在排队或处理中的任务支持手动停止，会尝试终止对应 FFmpeg 子进程
 - 独立合并多个视频，按选择顺序输出一个 MP4
 - 独立切分大视频，可输入类似 `50-56` 的随机秒数范围，按顺序切完整个视频
+- 支持输入 YouTube / Facebook / Instagram / TikTok 等公开视频分享链接下载到本地
 - 本地运行，上传和输出都保存在本机 `data/` 目录
 
 ## 一键启动 macOS
@@ -67,12 +68,37 @@ run_windows.bat
 ```bash
 POST /api/merge
 POST /api/split
+POST /api/download-url
 GET /api/download/{task_id}
 GET /api/download/{task_id}/variants/{index}
 GET /api/download/{task_id}/package
 ```
 
 注意：为了完整切完视频，最后一个片段可能短于输入范围。
+
+## 链接下载
+
+项目集成了 `yt-dlp`，可以把主流平台公开视频分享链接下载到本地 `data/uploads/`。安装依赖后可直接命令行调用：
+
+```bash
+python scripts/download_url.py "https://www.youtube.com/watch?v=xxxx"
+```
+
+需要登录态的平台，例如部分 Facebook / Instagram 链接，可以让 `yt-dlp` 读取浏览器 cookies：
+
+```bash
+python scripts/download_url.py "https://www.instagram.com/reel/xxxx/" --cookies-browser chrome
+```
+
+也可以通过后端接口调用：
+
+```bash
+curl -X POST http://127.0.0.1:8120/api/download-url \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://www.youtube.com/watch?v=xxxx"}'
+```
+
+返回里会包含 `filepath`、`filename`、`download_url`、`title`、`duration` 等字段，后续处理可以直接使用 `filepath`。
 
 ## FFmpeg
 

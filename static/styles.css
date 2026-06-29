@@ -218,7 +218,8 @@ label {
 
 select,
 input[type="number"],
-input[type="text"] {
+input[type="text"],
+textarea {
   width: 100%;
   margin-top: 10px;
   padding: 14px 15px;
@@ -228,6 +229,12 @@ input[type="text"] {
   border-radius: 10px;
   font: inherit;
   font-size: 16px;
+}
+
+textarea {
+  min-height: 118px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .switches {
@@ -247,6 +254,21 @@ input[type="text"] {
 .switches input {
   accent-color: var(--accent);
   margin-right: 8px;
+}
+
+.check-row {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 33px;
+  padding: 0 2px;
+}
+
+.check-row input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
 }
 
 .primary,
@@ -383,7 +405,7 @@ input[type="text"] {
   }
   .tool-menu {
     position: static;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
   .results { grid-column: auto; }
 }

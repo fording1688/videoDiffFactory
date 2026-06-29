@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260521-lightfx" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260609-download" />
 </head>
 <body>
   <main class="shell">
@@ -27,6 +27,10 @@
         <button class="menu-item active" type="button" data-view="variantView">
           <span>处理视频</span>
           <small>生成视觉差异化版本</small>
+        </button>
+        <button class="menu-item" type="button" data-view="downloadView">
+          <span>下载视频</span>
+          <small>粘贴主流平台分享链接</small>
         </button>
         <button class="menu-item" type="button" data-view="mergeView">
           <span>合并视频</span>
@@ -91,6 +95,50 @@
           <button class="primary" type="submit">开始生成视觉版本</button>
           <p class="hint">多选视频会分别独立处理，不会互相合并；线程数表示本批最多同时处理几个视频。</p>
         </form>
+
+        <section class="panel uploader tool-view" id="downloadView" data-view-panel="downloadView">
+          <div class="section-title">
+            <p class="eyebrow">URL DOWNLOAD</p>
+            <h2>下载视频</h2>
+            <p class="tool-copy">粘贴 YouTube / Facebook / Instagram / TikTok 等平台的公开视频分享链接，下载后会保存到本地素材目录。</p>
+          </div>
+          <form id="downloadForm" class="mini-form" method="post">
+            <div class="field-row">
+              <label>
+                视频分享链接
+                <textarea id="downloadUrl" name="url" rows="4" placeholder="https://www.youtube.com/watch?v=..."></textarea>
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label>
+                浏览器 cookies
+                <select id="downloadCookiesBrowser" name="cookies_browser">
+                  <option value="">不使用</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="safari">Safari</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="edge">Edge</option>
+                </select>
+              </label>
+              <label>
+                代理地址
+                <input id="downloadProxy" name="proxy" type="text" placeholder="http://127.0.0.1:7890" />
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label class="check-row">
+                <input id="downloadAllowPlaylist" name="allow_playlist" type="checkbox" />
+                允许主页 / 合集批量下载
+              </label>
+              <label>
+                最多下载数量
+                <input id="downloadMaxDownloads" name="max_downloads" type="number" min="1" max="200" value="30" />
+              </label>
+            </div>
+            <button class="primary" type="submit">下载视频</button>
+            <p class="hint">单条分享链接直接下载；主页、Reels 页、合集或频道链接请勾选批量下载，并设置数量上限。</p>
+          </form>
+        </section>
 
         <section class="panel uploader tool-view" id="mergeView" data-view-panel="mergeView">
           <div class="section-title">
@@ -181,6 +229,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=20260521-lightfx"></script>
+  <script src="/static/app.js?v=20260609-download"></script>
 </body>
 </html>

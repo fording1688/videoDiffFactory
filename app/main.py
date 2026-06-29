@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import shutil
+import mimetypes
 import os
 import threading
 import traceback
@@ -18,8 +19,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cancel import CancelledTask, clear_cancel, is_cancel_requested, request_cancel
+from .downloader import DownloadError, download_video_url
 from .drama_factory import options_from_tool_options, render_drama_factory
-from .models import BatchUploadResponse, TaskState, UploadResponse, VariantOptions, VariantTask
+from .models import BatchUploadResponse, DownloadUrlRequest, DownloadUrlResponse, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem
 from .visual_variant import merge_videos, render_variant, split_video_by_random_range
 
@@ -246,6 +248,53 @@ def _render_tool_task(task: VariantTask) -> None:
             _set(task, status=TaskState.completed, progress=100, message=f"合并完成，共 {len(task.source_paths)} 个视频")
             return
 
+        if task.operation == "download":
+            url = str(task.tool_options.get("url") or "")
+            cookies_browser = task.tool_options.get("cookies_browser") or None
+            proxy = task.tool_options.get("proxy") or None
+            allow_playlist = bool(task.tool_options.get("allow_playlist"))
+            max_downloads = task.tool_options.get("max_downloads")
+            _set(task, status=TaskState.processing, progress=10, message="正在解析分享链接")
+            output_paths, info = download_video_url(
+                url=url,
+                output_dir=UPLOAD_DIR,
+                task_id=task.task_id,
+                cookies_browser=str(cookies_browser) if cookies_browser else None,
+                proxy=str(proxy) if proxy else None,
+                allow_playlist=allow_playlist,
+                max_downloads=int(max_downloads) if max_downloads else None,
+            )
+            output_path = output_paths[0]
+            filename = output_path.name
+            task.original_filename = filename
+            task.input_path = str(output_path)
+            task.output_path = str(output_path)
+            task.source_paths = [str(path) for path in output_paths]
+            task.source_filenames = [path.name for path in output_paths]
+            if len(output_paths) == 1:
+                task.download_url = f"/api/download/{task.task_id}"
+            else:
+                task.variant_paths = [str(path) for path in output_paths]
+                task.variant_download_urls = [
+                    f"/api/download/{task.task_id}/variants/{index}" for index in range(1, len(output_paths) + 1)
+                ]
+            task.effects = {
+                "operation": "download",
+                "source_url": url,
+                "extractor": info.get("extractor_key") or info.get("extractor") or "",
+                "title": info.get("title") or "",
+                "duration": _safe_float(info.get("duration")),
+                "download_count": len(output_paths),
+                "allow_playlist": allow_playlist,
+                "webpage_url": info.get("webpage_url") or url,
+            }
+            try:
+                task.video_info = get_video_info(output_path)
+            except Exception:
+                task.video_info = None
+            _set(task, status=TaskState.completed, progress=100, message=f"链接视频下载完成，共 {len(output_paths)} 个文件")
+            return
+
         if task.operation == "drama_factory":
             options = options_from_tool_options(task.tool_options)
             _set(task, status=TaskState.processing, progress=12, message="Detecting high-emotion drama clips")
@@ -332,6 +381,20 @@ def _parse_split_range(value: str) -> tuple[float, float]:
     return min_seconds, max_seconds
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _media_type(path: Path, fallback: str = "application/octet-stream") -> str:
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or fallback
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -413,6 +476,34 @@ async def upload_video(
     )
     with TASK_LOCK:
         BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
+        TASKS[task_id] = task
+    _submit_task(task_id)
+    return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
+
+
+@app.post("/api/download-url", response_model=UploadResponse)
+def download_from_url(payload: DownloadUrlRequest) -> UploadResponse:
+    task_id = uuid.uuid4().hex[:12]
+    url = (payload.url or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="请输入视频分享链接。")
+    task = VariantTask(
+        task_id=task_id,
+        operation="download",
+        original_filename=url,
+        batch_id=uuid.uuid4().hex[:12],
+        worker_count=1,
+        output_count=1,
+        message="等待下载分享链接",
+        tool_options={
+            "url": url,
+            "cookies_browser": payload.cookies_browser,
+            "proxy": payload.proxy,
+            "allow_playlist": payload.allow_playlist,
+            "max_downloads": max(1, min(int(payload.max_downloads or 30), 200)),
+        },
+    )
+    with TASK_LOCK:
         TASKS[task_id] = task
     _submit_task(task_id)
     return UploadResponse(task_id=task_id, status_url=f"/api/tasks/{task_id}")
@@ -643,7 +734,7 @@ def download(task_id: str) -> FileResponse:
     path = Path(output)
     if not path.exists():
         raise HTTPException(status_code=404, detail="输出文件已不存在。")
-    return FileResponse(path, filename=path.name, media_type="video/mp4")
+    return FileResponse(path, filename=path.name, media_type=_media_type(path, "video/mp4"))
 
 
 @app.get("/api/download/{task_id}/package")
@@ -665,4 +756,4 @@ def download_variant(task_id: str, index: int) -> FileResponse:
     path = Path(task.variant_paths[index - 1])
     if not path.exists():
         raise HTTPException(status_code=404, detail="输出文件已不存在。")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    return FileResponse(path, media_type=_media_type(path, "video/mp4"), filename=path.name)
