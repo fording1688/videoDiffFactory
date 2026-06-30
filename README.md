@@ -8,7 +8,7 @@
 - 批量上传 `mp4 / mov / avi / webm / m4v`
 - 多个视频会分别独立处理，不会先合并
 - 可设置生成版本数量，例如上传 5 个视频且填 `3`，会为每个视频生成 3 个独立版本
-- 多文件任务支持自定义线程数并发处理，默认最多同时跑 `3` 个视频，其余自动排队
+- 多文件任务支持自定义线程数并发处理，默认最多同时跑 `6` 个视频，其余自动排队
 - 开关式处理模块，不需要手动调复杂参数
 - 自动随机生成安全范围内的视觉参数
 - 输出 1080x1920 竖屏 MP4
@@ -40,7 +40,7 @@ cd "video-variant-studio"
 http://127.0.0.1:8120
 ```
 
-页面里可以直接设置“线程数”，默认 `3`。建议普通电脑保持 `2-3`，高配机器可调到 `4-6`。
+页面里可以直接设置“线程数”，默认 `6`。建议普通电脑保持 `4-6`，高配机器可调到 `6-8`。
 
 如果要限制客户机器的最高线程数，可在启动前设置环境变量；默认最高允许 `8`：
 
@@ -137,6 +137,32 @@ macOS / Linux 复制后需要给执行权限：
 chmod +x runtime/ffmpeg/mac-arm64/ffmpeg runtime/ffmpeg/mac-arm64/ffprobe
 chmod +x runtime/ffmpeg/mac-x64/ffmpeg runtime/ffmpeg/mac-x64/ffprobe
 chmod +x runtime/ffmpeg/linux-x64/ffmpeg runtime/ffmpeg/linux-x64/ffprobe
+```
+
+## 导出体积控制
+
+默认导出参数已调整为更小文件：
+
+```txt
+分辨率：480x854 竖屏
+格式：MP4
+帧率：30 fps
+视频编码：H.264
+视频码率：低码率 CRF 30
+音频：AAC 192k / 44100 Hz / stereo
+编码速度：ultrafast
+```
+
+如果要改回 720P 竖屏，可在启动前设置：
+
+```bash
+VIDEO_VARIANT_EXPORT_WIDTH=720 VIDEO_VARIANT_EXPORT_HEIGHT=1280 ./run_mac.command
+```
+
+也可以手动调整压缩强度，数值越大文件越小、画质越低：
+
+```bash
+VIDEO_VARIANT_EXPORT_CRF=32 ./run_mac.command
 ```
 
 ## 打包成可执行文件

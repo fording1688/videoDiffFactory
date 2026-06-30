@@ -5,6 +5,7 @@ const splitForm = document.getElementById('splitForm');
 const dramaForm = document.getElementById('dramaForm');
 const taskList = document.getElementById('taskList');
 const runtimeCard = document.getElementById('runtimeCard');
+const chooseOutputDirButton = document.getElementById('chooseOutputDir');
 const tasks = new Map();
 const menuItems = document.querySelectorAll('.menu-item');
 const toolViews = document.querySelectorAll('[data-view-panel]');
@@ -19,6 +20,24 @@ function activateView(viewId) {
 menuItems.forEach(item => {
   item.addEventListener('click', () => activateView(item.dataset.view));
 });
+
+if (chooseOutputDirButton) {
+  chooseOutputDirButton.addEventListener('click', async () => {
+    chooseOutputDirButton.disabled = true;
+    chooseOutputDirButton.textContent = '选择中...';
+    try {
+      const res = await fetch('/api/select-output-dir', { method: 'POST' });
+      if (!res.ok) throw new Error(await readError(res));
+      const payload = await res.json();
+      if (payload.path) document.getElementById('variantOutputDir').value = payload.path;
+    } catch (error) {
+      alert('选择文件夹失败：' + (error.message || error));
+    } finally {
+      chooseOutputDirButton.disabled = false;
+      chooseOutputDirButton.textContent = '选择';
+    }
+  });
+}
 
 function setSubmitLocked(locked, text = '') {
   const button = form.querySelector('button');
@@ -87,8 +106,11 @@ form.addEventListener('submit', async (event) => {
     [...files].forEach(file => data.append('files', file));
     data.set('intensity', document.getElementById('intensity').value);
     data.set('output_count', document.getElementById('outputCount').value || '1');
-    data.set('worker_count', document.getElementById('workerCount').value || '3');
-    ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette', 'effect_center_scratch', 'effect_light_sweep', 'effect_film_grain'].forEach(name => boolField(data, name));
+    data.set('worker_count', document.getElementById('workerCount').value || '6');
+    data.set('output_dir', document.getElementById('variantOutputDir').value || 'data/outputs');
+    data.set('hook_texts', document.getElementById('hookTexts').value || '');
+    data.set('hook_duration', document.getElementById('hookDuration').value || '3');
+    ['effect_background', 'effect_zoom', 'effect_color', 'effect_texture', 'effect_speed', 'effect_vignette', 'effect_center_scratch', 'effect_light_sweep', 'effect_film_grain', 'effect_hook_caption'].forEach(name => boolField(data, name));
     const res = await fetch('/api/upload-batch', { method: 'POST', body: data });
     if (!res.ok) throw new Error(await res.text());
     const payload = await res.json();

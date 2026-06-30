@@ -24,6 +24,19 @@ def asset_root() -> Path:
     return app_root()
 
 
+def user_data_root() -> Path:
+    configured = os.getenv("VIDEO_VARIANT_DATA_DIR")
+    if configured:
+        return Path(configured).expanduser()
+
+    if getattr(sys, "frozen", False):
+        if platform.system().lower() == "darwin":
+            return Path.home() / "Movies" / "VideoVariantStudio"
+        return Path.home() / "VideoVariantStudio"
+
+    return app_root() / "data"
+
+
 def runtime_platform_dir() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()

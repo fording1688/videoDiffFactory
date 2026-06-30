@@ -36,6 +36,9 @@ class VariantOptions(BaseModel):
     effect_center_scratch: bool = True
     effect_light_sweep: bool = True
     effect_film_grain: bool = True
+    effect_hook_caption: bool = False
+    hook_texts: list[str] = Field(default_factory=list)
+    hook_duration: float = 3.0
 
 
 class VariantTask(BaseModel):

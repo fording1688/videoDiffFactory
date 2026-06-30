@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260609-download" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260630-hook-caption" />
 </head>
 <body>
   <main class="shell">
@@ -60,6 +60,16 @@
 
           <div class="field-row">
             <label>
+              输出文件夹路径
+              <span class="path-picker">
+                <input id="variantOutputDir" name="output_dir" type="text" value="data/outputs" placeholder="/Users/fording/Desktop/output" />
+                <button id="chooseOutputDir" class="secondary compact" type="button">选择</button>
+              </span>
+            </label>
+          </div>
+
+          <div class="field-row">
+            <label>
               处理强度
               <select id="intensity" name="intensity">
                 <option value="light">轻微</option>
@@ -76,7 +86,7 @@
             </label>
             <label>
               线程数
-              <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
+              <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="6" />
             </label>
           </div>
 
@@ -92,8 +102,29 @@
             <label><input type="checkbox" name="effect_film_grain" checked /> 胶片颗粒</label>
           </div>
 
+          <div class="hook-panel">
+            <label class="check-row compact-check">
+              <input id="effectHookCaption" name="effect_hook_caption" type="checkbox" />
+              字幕钩子
+            </label>
+            <div class="field-row two-col">
+              <label>
+                显示秒数
+                <input id="hookDuration" name="hook_duration" type="number" min="1" max="8" step="0.5" value="3" />
+              </label>
+              <label>
+                文案模式
+                <input type="text" value="每个版本随机一条" disabled />
+              </label>
+            </div>
+            <label>
+              钩子文案
+              <textarea id="hookTexts" name="hook_texts" rows="4" placeholder="不填会使用内置英文钩子；也可以一行输入一条英文文案，自定义随机。"></textarea>
+            </label>
+          </div>
+
           <button class="primary" type="submit">开始生成视觉版本</button>
-          <p class="hint">多选视频会分别独立处理，不会互相合并；线程数表示本批最多同时处理几个视频。</p>
+          <p class="hint">多选视频会分别独立处理；输出会保存到上方文件夹，命名为 1.mp4、2.mp4、3.mp4 依次排列。字幕钩子开启后，会在视频前几秒叠加一条随机英文吸引文案。</p>
         </form>
 
         <section class="panel uploader tool-view" id="downloadView" data-view-panel="downloadView">
@@ -229,6 +260,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=20260609-download"></script>
+  <script src="/static/app.js?v=20260630-hook-caption"></script>
 </body>
 </html>

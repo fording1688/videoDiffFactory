@@ -11,7 +11,7 @@ from typing import Any, Union
 
 from .cancel import CancelledTask, is_cancel_requested, run_cancellable
 from .video_utils import ffmpeg_bin, get_video_info, safe_stem
-from .visual_variant import _mp4_compat_args
+from .visual_variant import EXPORT_FPS, EXPORT_HEIGHT, EXPORT_WIDTH, _mp4_compat_args
 
 
 ANGLE_PROFILES: list[dict[str, str]] = [
@@ -311,20 +311,23 @@ def _render_version(
     duration = max(1.0, float(candidate["end"]) - start)
     hook = _safe_drawtext(script["hook"], 46)
     subtitles = [_safe_drawtext(line, 62) for line in script["subtitles"][:3]]
+    hook_font = max(28, int(EXPORT_WIDTH * 0.054))
+    subtitle_font = max(22, int(EXPORT_WIDTH * 0.04))
+    hook_y = max(48, int(EXPORT_HEIGHT * 0.0625))
+    y_positions = [int(EXPORT_HEIGHT * ratio) for ratio in (0.724, 0.775, 0.826)]
     vf = [
-        "scale=1080:1920:force_original_aspect_ratio=increase",
-        "crop=1080:1920",
-        "fps=30",
+        f"scale={EXPORT_WIDTH}:{EXPORT_HEIGHT}:force_original_aspect_ratio=increase",
+        f"crop={EXPORT_WIDTH}:{EXPORT_HEIGHT}",
+        f"fps={EXPORT_FPS}",
         "setsar=1",
-        "zoompan=z='min(zoom+0.00045,1.035)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30",
+        f"zoompan=z='min(zoom+0.00045,1.035)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={EXPORT_WIDTH}x{EXPORT_HEIGHT}:fps={EXPORT_FPS}",
         "eq=contrast=1.05:saturation=1.08",
         "vignette=PI/8",
-        f"drawtext=text='{hook}':x=(w-text_w)/2:y=120:fontsize=58:fontcolor=white:borderw=5:bordercolor=black@0.65:enable='between(t,0,3)'",
+        f"drawtext=text='{hook}':x=(w-text_w)/2:y={hook_y}:fontsize={hook_font}:fontcolor=white:borderw=5:bordercolor=black@0.65:enable='between(t,0,3)'",
     ]
-    y_positions = [1390, 1488, 1586]
     for line, y_pos in zip(subtitles, y_positions):
         vf.append(
-            f"drawtext=text='{line}':x=(w-text_w)/2:y={y_pos}:fontsize=43:"
+            f"drawtext=text='{line}':x=(w-text_w)/2:y={y_pos}:fontsize={subtitle_font}:"
             "fontcolor=white:borderw=4:bordercolor=black@0.72"
         )
     command = [

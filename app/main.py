@@ -4,6 +4,7 @@ import subprocess
 import shutil
 import mimetypes
 import os
+import platform
 import threading
 import traceback
 import uuid
@@ -22,13 +23,13 @@ from .cancel import CancelledTask, clear_cancel, is_cancel_requested, request_ca
 from .downloader import DownloadError, download_video_url
 from .drama_factory import options_from_tool_options, render_drama_factory
 from .models import BatchUploadResponse, DownloadUrlRequest, DownloadUrlResponse, TaskState, UploadResponse, VariantOptions, VariantTask
-from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem
+from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem, user_data_root
 from .visual_variant import merge_videos, render_variant, split_video_by_random_range
 
 
 APP_ROOT = app_root()
 ASSET_ROOT = asset_root()
-DATA_DIR = APP_ROOT / "data"
+DATA_DIR = user_data_root()
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
 STATIC_DIR = ASSET_ROOT / "static"
@@ -39,7 +40,7 @@ TASKS: dict[str, VariantTask] = {}
 TASK_FUTURES: dict[str, Future] = {}
 BATCH_LIMITS: dict[str, threading.BoundedSemaphore] = {}
 TASK_LOCK = threading.RLock()
-DEFAULT_PARALLEL_JOBS = 3
+DEFAULT_PARALLEL_JOBS = 6
 
 
 def _worker_cap() -> int:
@@ -122,6 +123,29 @@ def _sanitize_worker_count(value: int | None) -> int:
     return max(1, min(configured, MAX_WORKER_CAP))
 
 
+def _resolve_output_dir(value: str | None) -> Path:
+    cleaned = (value or "").strip()
+    output_dir = Path(cleaned).expanduser() if cleaned else OUTPUT_DIR
+    if not output_dir.is_absolute():
+        output_dir = APP_ROOT / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not output_dir.is_dir():
+        raise HTTPException(status_code=400, detail="输出文件夹路径无效。")
+    return output_dir.resolve()
+
+
+def _task_output_dir(task: VariantTask) -> Path:
+    output_dir = task.tool_options.get("output_dir")
+    return _resolve_output_dir(str(output_dir) if output_dir else None)
+
+
+def _variant_output_stem(task: VariantTask, version_index: int) -> str:
+    batch_total = max(1, int(task.tool_options.get("batch_total") or 1))
+    batch_position = max(1, int(task.tool_options.get("batch_position") or 1))
+    output_number = (version_index - 1) * batch_total + batch_position
+    return str(output_number)
+
+
 def _submit_task(task_id: str) -> None:
     with TASK_LOCK:
         task = TASKS[task_id]
@@ -184,6 +208,7 @@ def _render_task(task: VariantTask) -> None:
             raise RuntimeError(str(runtime.get("error") or "FFmpeg runtime missing"))
         _set(task, status=TaskState.processing, progress=8, message="正在准备视频素材")
         input_video = task.input_path
+        output_dir = _task_output_dir(task)
         variant_paths: list[str] = []
         effects_by_version: dict[str, Any] = {}
         info = None
@@ -196,10 +221,10 @@ def _render_task(task: VariantTask) -> None:
             variant_task_id = f"{task.task_id}v{index:02d}"
             output_path, effects, info = render_variant(
                 input_video=input_video,
-                output_dir=OUTPUT_DIR,
+                output_dir=output_dir,
                 task_id=variant_task_id,
                 options=task.options,
-                output_stem=f"{safe_stem(task.original_filename)}_version_{index:02d}",
+                output_stem=_variant_output_stem(task, index),
                 cancel_task_id=task.task_id,
             )
             variant_paths.append(str(output_path))
@@ -237,10 +262,11 @@ def _render_tool_task(task: VariantTask) -> None:
         runtime = check_runtime()
         if not runtime.get("ok"):
             raise RuntimeError(str(runtime.get("error") or "FFmpeg runtime missing"))
+        output_dir = _task_output_dir(task)
 
         if task.operation == "merge":
             _set(task, status=TaskState.processing, progress=15, message="正在按选择顺序合并视频")
-            output_path = merge_videos(input_paths=task.source_paths, work_dir=OUTPUT_DIR, task_id=task.task_id)
+            output_path = merge_videos(input_paths=task.source_paths, work_dir=output_dir, task_id=task.task_id)
             task.output_path = str(output_path)
             task.download_url = f"/api/download/{task.task_id}"
             task.video_info = get_video_info(output_path)
@@ -300,7 +326,7 @@ def _render_tool_task(task: VariantTask) -> None:
             _set(task, status=TaskState.processing, progress=12, message="Detecting high-emotion drama clips")
             paths, metadata_path, metadata = render_drama_factory(
                 input_video=task.input_path,
-                output_dir=OUTPUT_DIR,
+                output_dir=output_dir,
                 task_id=task.task_id,
                 options=options,
             )
@@ -315,7 +341,7 @@ def _render_tool_task(task: VariantTask) -> None:
                 "output_count": len(paths),
                 "transcript_source": metadata.get("transcript_source"),
             }
-            package_path = OUTPUT_DIR / f"{task.task_id}_short_drama_factory.zip"
+            package_path = output_dir / f"{task.task_id}_short_drama_factory.zip"
             _zip_outputs(package_path, [*paths, metadata_path])
             task.package_path = str(package_path)
             task.package_url = f"/api/download/{task.task_id}/package"
@@ -328,7 +354,7 @@ def _render_tool_task(task: VariantTask) -> None:
             _set(task, status=TaskState.processing, progress=15, message=f"正在按 {min_seconds:g}-{max_seconds:g} 秒随机切分视频")
             parts = split_video_by_random_range(
                 input_video=task.input_path,
-                output_dir=OUTPUT_DIR,
+                output_dir=output_dir,
                 task_id=task.task_id,
                 min_seconds=min_seconds,
                 max_seconds=max_seconds,
@@ -340,7 +366,7 @@ def _render_tool_task(task: VariantTask) -> None:
             task.output_path = str(paths[0]) if paths else None
             task.video_info = get_video_info(task.input_path)
             task.effects = {"operation": "split", "segments": parts, "range": [min_seconds, max_seconds]}
-            package_path = OUTPUT_DIR / f"{task.task_id}_split_parts.zip"
+            package_path = output_dir / f"{task.task_id}_split_parts.zip"
             _zip_outputs(package_path, paths)
             task.package_path = str(package_path)
             task.package_url = f"/api/download/{task.task_id}/package"
@@ -395,6 +421,34 @@ def _media_type(path: Path, fallback: str = "application/octet-stream") -> str:
     return guessed or fallback
 
 
+def _parse_hook_texts(value: str | None) -> list[str]:
+    lines = str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return [line.strip()[:80] for line in lines if line.strip()][:50]
+
+
+def _select_directory() -> str:
+    system = platform.system().lower()
+    if system == "darwin":
+        script = 'POSIX path of (choose folder with prompt "选择输出文件夹")'
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    if system == "windows":
+        script = (
+            "import tkinter as tk\n"
+            "from tkinter import filedialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "path = filedialog.askdirectory(title='选择输出文件夹')\n"
+            "print(path)\n"
+            "root.destroy()\n"
+        )
+        result = subprocess.run(["python", "-c", script], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+
+    raise HTTPException(status_code=400, detail="当前系统不支持弹出文件夹选择器，请手动输入输出路径。")
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -421,6 +475,18 @@ def version() -> dict[str, Any]:
     return _version_info()
 
 
+@app.post("/api/select-output-dir")
+def select_output_dir() -> dict[str, Any]:
+    try:
+        selected = _select_directory()
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or exc.stdout or "").strip()
+        raise HTTPException(status_code=400, detail=stderr or "没有选择文件夹。") from exc
+    if not selected:
+        raise HTTPException(status_code=400, detail="没有选择文件夹。")
+    return {"ok": True, "path": selected}
+
+
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_video(
     file: UploadFile = File(...),
@@ -434,8 +500,12 @@ async def upload_video(
     effect_center_scratch: bool = Form(True),
     effect_light_sweep: bool = Form(True),
     effect_film_grain: bool = Form(True),
+    effect_hook_caption: bool = Form(False),
+    hook_texts: str = Form(""),
+    hook_duration: float = Form(3.0),
     output_count: int = Form(1),
     worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
+    output_dir: str = Form(""),
 ) -> UploadResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="请选择视频文件。")
@@ -459,9 +529,13 @@ async def upload_video(
         effect_center_scratch=effect_center_scratch,
         effect_light_sweep=effect_light_sweep,
         effect_film_grain=effect_film_grain,
+        effect_hook_caption=effect_hook_caption,
+        hook_texts=_parse_hook_texts(hook_texts),
+        hook_duration=max(1.0, min(float(hook_duration or 3.0), 8.0)),
     )
     count = max(1, min(int(output_count or 1), 20))
     workers = _sanitize_worker_count(worker_count)
+    resolved_output_dir = _resolve_output_dir(output_dir)
     batch_id = uuid.uuid4().hex[:12]
     task = VariantTask(
         task_id=task_id,
@@ -473,6 +547,7 @@ async def upload_video(
         worker_count=workers,
         options=options,
         output_count=count,
+        tool_options={"output_dir": str(resolved_output_dir), "batch_total": 1, "batch_position": 1},
     )
     with TASK_LOCK:
         BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
@@ -628,18 +703,25 @@ async def upload_batch(
     effect_center_scratch: bool = Form(True),
     effect_light_sweep: bool = Form(True),
     effect_film_grain: bool = Form(True),
+    effect_hook_caption: bool = Form(False),
+    hook_texts: str = Form(""),
+    hook_duration: float = Form(3.0),
     output_count: int = Form(1),
     worker_count: int = Form(DEFAULT_PARALLEL_JOBS),
+    output_dir: str = Form(""),
 ) -> BatchUploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
 
     responses: list[UploadResponse] = []
     workers = _sanitize_worker_count(worker_count)
+    resolved_output_dir = _resolve_output_dir(output_dir)
+    valid_files = [file for file in files if file.filename]
+    batch_total = len(valid_files)
     batch_id = uuid.uuid4().hex[:12]
     with TASK_LOCK:
         BATCH_LIMITS[batch_id] = threading.BoundedSemaphore(workers)
-    for index, file in enumerate(files, start=1):
+    for index, file in enumerate(valid_files, start=1):
         if not file.filename:
             continue
         suffix = Path(file.filename).suffix.lower()
@@ -660,6 +742,9 @@ async def upload_batch(
             effect_center_scratch=effect_center_scratch,
             effect_light_sweep=effect_light_sweep,
             effect_film_grain=effect_film_grain,
+            effect_hook_caption=effect_hook_caption,
+            hook_texts=_parse_hook_texts(hook_texts),
+            hook_duration=max(1.0, min(float(hook_duration or 3.0), 8.0)),
         )
         task = VariantTask(
             task_id=task_id,
@@ -671,6 +756,11 @@ async def upload_batch(
             worker_count=workers,
             options=options,
             output_count=max(1, min(int(output_count or 1), 20)),
+            tool_options={
+                "output_dir": str(resolved_output_dir),
+                "batch_total": batch_total,
+                "batch_position": index,
+            },
         )
         with TASK_LOCK:
             TASKS[task_id] = task
