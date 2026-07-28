@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Video Variant Studio</title>
+  <link rel="stylesheet" href="/static/styles.css?v=0.3.11" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero panel">
+      <div>
+        <p class="eyebrow">LOCAL VIDEO TOOLKIT</p>
+        <h1>视频差异化工厂</h1>
+        <p class="lead">本地批量并发处理多个素材，每个视频独立生成视觉版本并保存到指定目录，用于素材 A/B 测试、内容排期和创意验证。</p>
+      </div>
+      <div class="status-card" id="runtimeCard">
+        <span>Runtime</span>
+        <strong>检测中</strong>
+        <small>FFmpeg / FFprobe</small>
+        <em id="versionInfo">Version loading...</em>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="tool-menu panel" aria-label="功能菜单">
+        <button class="menu-item active" type="button" data-view="variantView">
+          <span>处理视频</span>
+          <small>生成视觉差异化版本</small>
+        </button>
+        <button class="menu-item" type="button" data-view="downloadView">
+          <span>下载视频</span>
+          <small>粘贴主流平台分享链接</small>
+        </button>
+        <button class="menu-item" type="button" data-view="mergeView">
+          <span>合并视频</span>
+          <small>多个素材按顺序合成一个</small>
+        </button>
+        <button class="menu-item" type="button" data-view="splitView">
+          <span>切分视频</span>
+          <small>按随机秒数范围完整切段</small>
+        </button>
+        <button class="menu-item" type="button" data-view="dramaView">
+          <span>Short Drama</span>
+          <small>整集批量生成 Reel</small>
+        </button>
+        <button class="menu-item" type="button" data-view="cloudView">
+          <span>百度网盘</span>
+          <small>处理完成后自动上传</small>
+        </button>
+      </aside>
+
+      <section class="tool-stage">
+        <form class="panel uploader tool-view active" id="uploadForm" data-view-panel="variantView">
+          <div class="section-title variant-header">
+            <div>
+              <p class="eyebrow">VISUAL VARIANT</p>
+              <h2>处理视频</h2>
+              <p class="tool-copy">上传一个或多个素材，为每个视频独立生成视觉差异化版本。</p>
+            </div>
+            <label class="intro-field">
+              视频介绍
+              <textarea id="introText" name="intro_text" rows="3" placeholder="这里填写视频介绍，开始处理后会保存为 介绍.txt"></textarea>
+            </label>
+          </div>
+          <label class="drop-zone">
+            <span>选择一个或多个 MP4 / MOV / AVI</span>
+            <input id="videoFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+          </label>
+          <label class="drop-zone compact-drop">
+            <span>或选择一个视频文件夹</span>
+            <input id="variantFolder" type="file" multiple webkitdirectory />
+          </label>
+
+          <div class="field-row">
+            <label>
+              输出文件夹路径
+              <span class="path-picker">
+                <input id="variantOutputDir" name="output_dir" type="text" value="data/outputs" placeholder="/Users/fording/Desktop/output" />
+                <button id="chooseOutputDir" class="secondary compact" type="button">选择</button>
+              </span>
+            </label>
+          </div>
+          <div id="variantGroupList" class="batch-group-list"></div>
+          <button id="addVariantGroup" class="secondary" type="button">＋ 添加另一组输入 / 输出文件夹</button>
+
+          <div class="field-row">
+            <label>
+              处理强度
+              <select id="intensity" name="intensity">
+                <option value="light">轻微</option>
+                <option value="balanced" selected>均衡推荐</option>
+                <option value="strong">明显</option>
+              </select>
+            </label>
+          </div>
+          <div class="subtitle-panel">
+            <label class="check-row compact-check">
+              <input id="variantEnglishSubtitles" name="effect_english_subtitles" type="checkbox" />
+              中文对白翻译为英文字幕
+            </label>
+            <label>字幕识别模型
+              <select id="variantSubtitleModel" name="subtitle_model">
+                <option value="base" selected>Base（较快）</option>
+                <option value="small">Small（更准确）</option>
+              </select>
+            </label>
+            <p class="hint">首次使用会下载模型；同一源视频只识别一次，所有生成版本复用字幕。</p>
+          </div>
+
+          <div class="field-row two-col">
+            <label>
+              生成版本数量
+              <input id="outputCount" name="output_count" type="number" min="1" max="20" value="1" />
+            </label>
+            <label>
+              线程数
+              <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
+            </label>
+          </div>
+
+          <div class="switches">
+            <label><input type="checkbox" name="effect_background" checked /> 换背景</label>
+            <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
+            <label><input type="checkbox" name="effect_color" checked /> 色彩微调</label>
+            <label><input type="checkbox" name="effect_texture" checked /> 质感噪点</label>
+            <label><input type="checkbox" name="effect_speed" checked /> 改播放速度</label>
+            <label><input type="checkbox" name="effect_vignette" checked /> 暗角层</label>
+            <label><input type="checkbox" name="effect_center_scratch" checked /> 中线划痕</label>
+            <label><input type="checkbox" name="effect_light_sweep" checked /> 动态扫光</label>
+            <label><input type="checkbox" name="effect_film_grain" checked /> 胶片颗粒</label>
+            <label><input type="checkbox" name="effect_frame_extract" checked /> 帧提取</label>
+            <label><input type="checkbox" name="effect_frame_interpolate" /> 插帧</label>
+            <label><input type="checkbox" name="effect_md5" checked /> MD5 修改</label>
+            <label><input type="checkbox" name="effect_mirror" disabled /> 镜像（会反字幕，已禁用）</label>
+            <label><input type="checkbox" name="effect_border" checked /> 加边框</label>
+            <label><input type="checkbox" name="effect_random_transition" checked /> 随机转场</label>
+            <label><input type="checkbox" name="effect_remove_progress" checked /> 移除进度条</label>
+          </div>
+
+          <div class="hook-panel">
+            <label class="check-row compact-check">
+              <input id="effectHookClip" name="effect_hook_clip" type="checkbox" checked />
+              视频钩子：提取爆点放到开头
+            </label>
+            <div class="field-row two-col">
+              <label>
+                爆点秒数
+                <input id="hookClipSeconds" name="hook_clip_seconds" type="number" min="1" max="8" step="0.5" value="3" />
+              </label>
+              <label>
+                提取位置
+                <input type="text" value="自动从中后段抽取" disabled />
+              </label>
+            </div>
+            <label class="check-row compact-check">
+              <input id="effectHookCaption" name="effect_hook_caption" type="checkbox" />
+              字幕钩子：叠加英文文案
+            </label>
+            <div class="field-row two-col">
+              <label>
+                显示秒数
+                <input id="hookDuration" name="hook_duration" type="number" min="1" max="8" step="0.5" value="3" />
+              </label>
+              <label>
+                文案模式
+                <input type="text" value="每个版本随机一条" disabled />
+              </label>
+            </div>
+            <label>
+              钩子文案
+              <textarea id="hookTexts" name="hook_texts" rows="4" placeholder="不填会使用内置英文钩子；也可以一行输入一条英文文案，自定义随机。"></textarea>
+            </label>
+          </div>
+
+          <button class="primary" type="submit">开始生成视觉版本</button>
+          <p class="hint">多选视频会自动分批上传并分别独立处理；默认输出 720P。视频钩子会从原片抽取几秒放到最前面，再接完整处理后的视频。</p>
+        </form>
+
+        <section class="panel uploader tool-view" id="downloadView" data-view-panel="downloadView">
+          <div class="section-title">
+            <p class="eyebrow">URL DOWNLOAD</p>
+            <h2>下载视频</h2>
+            <p class="tool-copy">粘贴 YouTube / Facebook / Instagram / TikTok 等平台的公开视频分享链接，下载后会保存到本地素材目录。</p>
+          </div>
+          <form id="downloadForm" class="mini-form" method="post">
+            <div class="field-row">
+              <label>
+                视频分享链接
+                <textarea id="downloadUrl" name="url" rows="4" placeholder="https://www.youtube.com/watch?v=..."></textarea>
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label>
+                浏览器 cookies
+                <select id="downloadCookiesBrowser" name="cookies_browser">
+                  <option value="">不使用</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="safari">Safari</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="edge">Edge</option>
+                </select>
+              </label>
+              <label>
+                代理地址
+                <input id="downloadProxy" name="proxy" type="text" placeholder="http://127.0.0.1:7890" />
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label class="check-row">
+                <input id="downloadAllowPlaylist" name="allow_playlist" type="checkbox" />
+                允许主页 / 合集批量下载
+              </label>
+              <label>
+                最多下载数量
+                <input id="downloadMaxDownloads" name="max_downloads" type="number" min="1" max="200" value="30" />
+              </label>
+            </div>
+            <button class="primary" type="submit">下载视频</button>
+            <p class="hint">单条分享链接直接下载；主页、Reels 页、合集或频道链接请勾选批量下载，并设置数量上限。</p>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="cloudView" data-view-panel="cloudView">
+          <div class="section-title">
+            <p class="eyebrow">BAIDU NETDISK</p>
+            <h2>个人百度网盘</h2>
+            <p class="tool-copy">通过百度开放平台 OAuth 授权。处理视频和 Short Drama 完成后，自动上传最终视频；本地文件始终保留。</p>
+          </div>
+          <form id="baiduCloudForm" class="mini-form">
+            <div class="field-row two-col">
+              <label>App Key<input id="baiduAppKey" type="text" autocomplete="off" placeholder="百度开放平台 App Key" /></label>
+              <label>Secret Key<input id="baiduSecretKey" type="password" autocomplete="new-password" placeholder="已保存时可留空" /></label>
+            </div>
+            <div class="field-row two-col">
+              <label>目标目录<input id="baiduRemoteDir" type="text" placeholder="/apps/应用名称/VideoVariantStudio" /></label>
+              <label>OAuth 回调地址<input id="baiduRedirectUri" type="text" value="oob" placeholder="oob" /></label>
+            </div>
+            <label class="check-row compact-check">
+              <input id="baiduAutoUpload" type="checkbox" /> 处理完成后自动上传
+            </label>
+            <div class="cloud-actions">
+              <button id="baiduSaveButton" class="secondary compact" type="submit">保存设置</button>
+              <button id="baiduAuthorizeButton" class="secondary compact" type="button">打开百度授权</button>
+              <button id="baiduDisconnectButton" class="danger-button compact" type="button">解除授权</button>
+            </div>
+            <label>授权码<input id="baiduAuthCode" type="text" autocomplete="off" placeholder="授权完成后，把页面显示的 code 粘贴到这里" /></label>
+            <button id="baiduSubmitCodeButton" class="primary" type="button">提交授权码</button>
+            <p id="baiduCloudStatus" class="hint">正在读取百度网盘状态...</p>
+            <p class="hint">个人百度网盘开放平台通常只允许应用访问 <code>/apps/应用名称/</code> 目录。请先在百度网盘开放平台创建应用并取得 App Key/Secret Key。</p>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="mergeView" data-view-panel="mergeView">
+          <div class="section-title">
+            <p class="eyebrow">MERGE</p>
+            <h2>合并视频</h2>
+            <p class="tool-copy">选择两个或多个视频，系统会按选择顺序输出一个合并后的 MP4。</p>
+          </div>
+          <form id="mergeForm" class="mini-form">
+            <label class="drop-zone">
+              <span>选择多个视频，按选择顺序合并</span>
+              <input id="mergeFiles" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+            </label>
+            <label>
+              输出文件夹路径
+              <span class="path-picker">
+                <input id="mergeOutputDir" name="output_dir" type="text" value="data/outputs" placeholder="选择合并视频输出目录" />
+                <button id="chooseMergeOutputDir" class="secondary compact" type="button">选择</button>
+              </span>
+            </label>
+            <button class="primary" type="submit">合并视频</button>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="splitView" data-view-panel="splitView">
+          <div class="section-title">
+            <p class="eyebrow">SPLIT</p>
+            <h2>切分视频</h2>
+            <p class="tool-copy">选择一个大视频，按输入的随机秒数范围，从头到尾完整切分。</p>
+          </div>
+          <form id="splitForm" class="mini-form">
+            <label class="drop-zone">
+              <span>选择一个大视频</span>
+              <input id="splitFile" name="file" type="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/webm,.m4v" />
+            </label>
+            <div class="field-row">
+              <label>
+                随机片段秒数范围
+                <input id="segmentRange" name="segment_range" type="text" value="50-56" placeholder="例如 50-56" />
+              </label>
+            </div>
+            <label>
+              输出文件夹路径
+              <span class="path-picker">
+                <input id="splitOutputDir" name="output_dir" type="text" value="data/outputs" placeholder="选择切分视频输出目录" />
+                <button id="chooseSplitOutputDir" class="secondary compact" type="button">选择</button>
+              </span>
+            </label>
+            <button class="primary" type="submit">切分视频</button>
+            <p class="hint">例如输入 50-56，会按 50 到 56 秒之间的随机长度，按顺序切完整个视频。最后一个片段可能略短。</p>
+          </form>
+        </section>
+
+        <section class="panel uploader tool-view" id="dramaView" data-view-panel="dramaView">
+          <div class="section-title">
+            <p class="eyebrow">DRAMA CLIP FACTORY</p>
+            <h2>Short Drama Reel 工厂</h2>
+            <p class="tool-copy">批量上传剧集，按选择顺序合并并完整切段，再并行生成最终处理版本。</p>
+          </div>
+          <form id="dramaForm" class="mini-form">
+            <label class="check-row compact-check">
+              <input id="dramaRootMode" type="checkbox" />
+              根目录批量模式（每个一级子文件夹作为一组）
+            </label>
+            <div id="dramaRootModeFields" class="subtitle-panel" hidden>
+              <label>
+                剧集源根目录
+                <span class="path-picker">
+                  <input id="dramaSourceRoot" type="text" placeholder="例如 /Users/name/DramaSource" />
+                  <button id="chooseDramaSourceRoot" class="secondary compact" type="button">选择</button>
+                </span>
+              </label>
+              <label>
+                输出目标根目录
+                <span class="path-picker">
+                  <input id="dramaRootOutputDir" type="text" placeholder="例如 /Users/name/DramaOutput" />
+                  <button id="chooseDramaRootOutputDir" class="secondary compact" type="button">选择</button>
+                </span>
+              </label>
+              <div class="field-row two-col">
+                <label>
+                  同时处理目录数
+                  <input id="dramaGroupParallelism" type="number" min="1" max="4" value="1" />
+                </label>
+                <label>
+                  扫描预览
+                  <button id="scanDramaRootButton" class="secondary" type="button">扫描目录</button>
+                </label>
+              </div>
+              <p id="dramaRootScanResult" class="hint">只扫描源根目录的一级子文件夹；每个含视频的文件夹会成为一组任务。</p>
+              <p class="hint">源子文件夹里的所有 TXT 会原名复制到同名输出文件夹；其中 介绍.txt 可作为该组介绍。</p>
+            </div>
+            <div id="dramaManualModeFields">
+            <label class="drop-zone">
+              <span>选择多集视频，系统按选择顺序合并</span>
+              <input id="dramaFile" name="files" type="file" multiple accept="video/mp4,video/quicktime,video/x-matroska,video/x-msvideo,video/webm,.m4v,.mkv" />
+            </label>
+            <label class="drop-zone compact-drop">
+              <span>或选择整个剧集文件夹</span>
+              <input id="dramaFolder" name="folder_files" type="file" multiple webkitdirectory />
+            </label>
+            <div class="field-row">
+              <label>
+                最终视频输出目录
+                <span class="path-picker">
+                  <input id="dramaOutputDir" name="output_dir" type="text" value="data/outputs" placeholder="/Users/fording/Desktop/drama-output" />
+                  <button id="chooseDramaOutputDir" class="secondary compact" type="button">选择</button>
+                </span>
+              </label>
+            </div>
+            <div id="dramaGroupList" class="batch-group-list"></div>
+            <button id="addDramaGroup" class="secondary" type="button">＋ 添加另一组剧集 / 输出文件夹</button>
+            </div>
+            <label>
+              视频介绍（根目录模式下作为没有 介绍.txt 的公共默认内容）
+              <textarea name="intro_text" rows="4" placeholder="输入发布文案或视频介绍；完成后保存到最终输出目录/介绍.txt"></textarea>
+            </label>
+            <div class="subtitle-panel">
+              <label class="check-row compact-check">
+                <input name="effect_english_subtitles" type="checkbox" />
+                中文对白翻译为英文字幕
+              </label>
+              <label>字幕识别模型
+                <select name="subtitle_model">
+                  <option value="base" selected>Base（较快）</option>
+                  <option value="small">Small（更准确）</option>
+                </select>
+              </label>
+              <p class="hint">整组合并后只识别一次，再按切分时间自动分配英文字幕。</p>
+            </div>
+            <div class="field-row two-col">
+              <label>
+                切分最短秒数
+                <input name="min_seconds" type="number" min="5" max="90" step="0.5" value="28" />
+              </label>
+              <label>
+                切分最长秒数
+                <input name="max_seconds" type="number" min="5" max="120" step="0.5" value="30" />
+              </label>
+            </div>
+            <div class="field-row three-col">
+              <label>
+                每段生成版本数
+                <input name="versions_per_episode" type="number" min="1" max="10" value="1" />
+              </label>
+              <label>
+                处理线程数
+                <input name="worker_count" type="number" min="1" max="8" value="3" />
+              </label>
+              <label>
+                处理强度
+                <select name="intensity">
+                  <option value="light">轻微</option>
+                  <option value="balanced" selected>均衡推荐</option>
+                  <option value="strong">明显</option>
+                </select>
+              </label>
+            </div>
+            <div class="switches">
+              <label><input type="checkbox" name="effect_background" checked /> 换背景</label>
+              <label><input type="checkbox" name="effect_zoom" checked /> 随机微缩放/偏移</label>
+              <label><input type="checkbox" name="effect_color" checked /> 色彩微调</label>
+              <label><input type="checkbox" name="effect_texture" checked /> 质感噪点</label>
+              <label><input type="checkbox" name="effect_speed" checked /> 改播放速度</label>
+              <label><input type="checkbox" name="effect_vignette" checked /> 暗角层</label>
+              <label><input type="checkbox" name="effect_center_scratch" checked /> 中线划痕</label>
+              <label><input type="checkbox" name="effect_light_sweep" checked /> 动态扫光</label>
+              <label><input type="checkbox" name="effect_film_grain" checked /> 胶片颗粒</label>
+              <label><input type="checkbox" name="effect_frame_extract" checked /> 帧提取</label>
+              <label><input type="checkbox" name="effect_frame_interpolate" /> 插帧</label>
+              <label><input type="checkbox" name="effect_md5" checked /> MD5 修改</label>
+              <label><input type="checkbox" name="effect_border" checked /> 加边框</label>
+              <label><input type="checkbox" name="effect_random_transition" checked /> 随机转场</label>
+              <label><input type="checkbox" name="effect_remove_progress" checked /> 移除进度条</label>
+            </div>
+            <div class="hook-panel">
+              <label class="check-row compact-check">
+                <input name="effect_hook_clip" type="checkbox" /> 视频钩子：提取爆点放到开头
+              </label>
+              <div class="field-row two-col">
+                <label>爆点秒数<input name="hook_clip_seconds" type="number" min="1" max="8" step="0.5" value="3" /></label>
+                <label>字幕钩子显示秒数<input name="hook_duration" type="number" min="1" max="8" step="0.5" value="3" /></label>
+              </div>
+              <label class="check-row compact-check">
+                <input name="effect_hook_caption" type="checkbox" /> 字幕钩子：叠加英文文案
+              </label>
+              <label>钩子文案<textarea name="hook_texts" rows="3" placeholder="一行一条；留空使用内置英文钩子"></textarea></label>
+            </div>
+            <button id="dramaSubmitButton" class="primary" type="submit">开始流水线处理</button>
+            <p class="hint">流程：按顺序合并 → 按设置秒数完整切分 → 使用所选参数并行处理 → 只保留最终版本；合并和切分中间文件自动删除。</p>
+          </form>
+          <div id="dramaReelResults" class="reel-results"></div>
+        </section>
+      </section>
+
+      <section class="panel results">
+        <div class="section-title">
+          <p class="eyebrow">TASKS</p>
+          <h2>处理状态</h2>
+        </div>
+        <div id="taskSummary" class="task-summary" hidden></div>
+        <div id="taskList" class="task-list empty">等待上传视频。</div>
+        <div id="taskPagination" class="task-pagination" hidden></div>
+      </section>
+    </section>
+  </main>
+  <script src="/static/app.js?v=0.3.11"></script>
+</body>
+</html>
