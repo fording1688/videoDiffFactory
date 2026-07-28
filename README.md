@@ -59,14 +59,14 @@ run_windows.bat
 
 ## 升级与百度网盘授权
 
-通用源码包不包含 `data/`，解压升级包覆盖程序文件时不会覆盖现有百度授权。不要先删除旧程序中的 `data/baidu_pan.json`。
+源码版和打包版都把配置、授权及运行缓存保存在项目外的用户数据目录，覆盖源码或重新下载项目不会丢失百度授权。旧版项目目录中的 `data/baidu_pan.json` 会在首次启动时自动迁移。
 
 打包可执行版的授权保存在用户目录，不随程序升级包一起替换：
 
 - Windows：`C:\Users\当前用户\VideoVariantStudio\baidu_pan.json`
 - macOS：`~/Movies/VideoVariantStudio/baidu_pan.json`
 
-源码方式运行时，授权保存在项目目录的 `data/baidu_pan.json`；升级时直接覆盖源码文件并保留原 `data/` 即可。
+也可以通过环境变量 `VIDEO_VARIANT_DATA_DIR` 指定其他持久目录。
 
 ## 合并和切分
 

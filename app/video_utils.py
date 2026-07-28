@@ -32,12 +32,12 @@ def user_data_root() -> Path:
     if configured:
         return Path(configured).expanduser()
 
-    if getattr(sys, "frozen", False):
-        if platform.system().lower() == "darwin":
-            return Path.home() / "Movies" / "VideoVariantStudio"
+    system = platform.system().lower()
+    if system == "darwin":
+        return Path.home() / "Movies" / "VideoVariantStudio"
+    if system == "windows":
         return Path.home() / "VideoVariantStudio"
-
-    return app_root() / "data"
+    return Path(os.getenv("XDG_DATA_HOME") or (Path.home() / ".local" / "share")) / "VideoVariantStudio"
 
 
 def runtime_platform_dir() -> str:

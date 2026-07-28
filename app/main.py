@@ -46,6 +46,31 @@ from .visual_variant import merge_videos, render_variant, selected_video_encoder
 APP_ROOT = app_root()
 ASSET_ROOT = asset_root()
 DATA_DIR = user_data_root()
+
+
+def _migrate_legacy_state_files() -> None:
+    """Move persistent settings out of an older source checkout on first upgrade."""
+    legacy_dir = APP_ROOT / "data"
+    try:
+        if legacy_dir.resolve() == DATA_DIR.resolve() or not legacy_dir.is_dir():
+            return
+    except OSError:
+        return
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for name in ("baidu_pan.json", "settings.json", "app.db", "app.sqlite", "app.sqlite3"):
+        source = legacy_dir / name
+        target = DATA_DIR / name
+        if not source.is_file() or target.exists():
+            continue
+        try:
+            shutil.copy2(source, target)
+            source.unlink()
+        except OSError:
+            # Keep using the old file as a recoverable backup if migration fails.
+            continue
+
+
+_migrate_legacy_state_files()
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
 WORK_DIR = DATA_DIR / "work"
@@ -71,7 +96,7 @@ def _worker_cap() -> int:
 MAX_WORKER_CAP = _worker_cap()
 EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKER_CAP, thread_name_prefix="variant-worker")
 CLOUD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="baidu-upload")
-APP_VERSION = "0.3.11"
+APP_VERSION = "0.3.12"
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
 
 app = FastAPI(
