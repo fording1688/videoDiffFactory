@@ -10,6 +10,8 @@ from .video_utils import ffmpeg_bin
 
 _MODEL_LOCK = threading.Lock()
 _MODELS: dict[str, Any] = {}
+SUBTITLE_FILL = (255, 222, 0, 255)
+SUBTITLE_OUTLINE = (0, 0, 0, 255)
 
 def translate_chinese_speech(
     video_path: Path,
@@ -94,14 +96,17 @@ def create_subtitle_overlays(
     speed = max(0.1, float(speed or 1.0))
     output_dir.mkdir(parents=True, exist_ok=True)
     font_candidates = [
+        Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
         Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
         Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        Path("C:/Windows/Fonts/arialbd.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
     ]
     font_path = next((item for item in font_candidates if item.exists()), None)
-    font_size = max(28, int(width * 0.052))
+    font_size = max(32, int(width * 0.058))
     font = ImageFont.truetype(str(font_path), font_size) if font_path else ImageFont.load_default()
     max_width = width - 76
+    outline_width = max(3, int(width * 0.006))
     overlays: list[dict[str, Any]] = []
     for index, item in enumerate(segments, start=1):
         start = float(item.get("start") or 0)
@@ -116,7 +121,7 @@ def create_subtitle_overlays(
         current = ""
         for word in words:
             candidate = f"{current} {word}".strip()
-            box = draw.textbbox((0, 0), candidate, font=font, stroke_width=2)
+            box = draw.textbbox((0, 0), candidate, font=font, stroke_width=outline_width)
             if current and box[2] - box[0] > max_width:
                 lines.append(current)
                 current = word
@@ -125,16 +130,21 @@ def create_subtitle_overlays(
         if current:
             lines.append(current)
         lines = lines[:3]
-        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=2) for line in lines]
+        boxes = [draw.textbbox((0, 0), line, font=font, stroke_width=outline_width) for line in lines]
         line_height = max((box[3] - box[1] for box in boxes), default=font_size)
-        panel_height = line_height * len(lines) + 18 * 2 + 8 * max(0, len(lines) - 1)
-        y0 = height - max(72, int(height * 0.09)) - panel_height
-        draw.rounded_rectangle((24, y0, width - 24, y0 + panel_height), radius=16, fill=(0, 0, 0, 145))
-        y = y0 + 18
+        subtitle_height = line_height * len(lines) + 8 * max(0, len(lines) - 1)
+        y = height - max(72, int(height * 0.09)) - subtitle_height
         for line, box in zip(lines, boxes):
             text_width = box[2] - box[0]
             x = (width - text_width) // 2
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(10, 10, 10, 245))
+            draw.text(
+                (x, y),
+                line,
+                font=font,
+                fill=SUBTITLE_FILL,
+                stroke_width=outline_width,
+                stroke_fill=SUBTITLE_OUTLINE,
+            )
             y += line_height + 8
         path = output_dir / f"{task_id}_subtitle_{index:04d}.png"
         probe.save(path)

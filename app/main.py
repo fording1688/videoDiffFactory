@@ -96,7 +96,7 @@ def _worker_cap() -> int:
 MAX_WORKER_CAP = _worker_cap()
 EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKER_CAP, thread_name_prefix="variant-worker")
 CLOUD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="baidu-upload")
-APP_VERSION = "0.3.12"
+APP_VERSION = "0.3.13"
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
 
 app = FastAPI(

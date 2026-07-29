@@ -97,7 +97,7 @@
           <div class="subtitle-panel">
             <label class="check-row compact-check">
               <input id="variantEnglishSubtitles" name="effect_english_subtitles" type="checkbox" />
-              中文对白翻译为英文字幕
+              中文对白翻译为英文字幕（烧录画面）
             </label>
             <label>字幕识别模型
               <select id="variantSubtitleModel" name="subtitle_model">
@@ -105,7 +105,7 @@
                 <option value="small">Small（更准确）</option>
               </select>
             </label>
-            <p class="hint">首次使用会下载模型；同一源视频只识别一次，所有生成版本复用字幕。</p>
+            <p class="hint">黄色英文字幕＋黑色描边，直接烧录进画面；不生成字幕轨道，不依赖 Facebook 自动字幕。</p>
           </div>
 
           <div class="field-row two-col">
@@ -369,7 +369,7 @@
             <div class="subtitle-panel">
               <label class="check-row compact-check">
                 <input name="effect_english_subtitles" type="checkbox" />
-                中文对白翻译为英文字幕
+                中文对白翻译为英文字幕（烧录画面）
               </label>
               <label>字幕识别模型
                 <select name="subtitle_model">
@@ -377,7 +377,7 @@
                   <option value="small">Small（更准确）</option>
                 </select>
               </label>
-              <p class="hint">整组合并后只识别一次，再按切分时间自动分配英文字幕。</p>
+              <p class="hint">整组合并后只识别一次；黄色英文字幕＋黑色描边直接烧录进画面，不生成字幕轨道。</p>
             </div>
             <div class="field-row two-col">
               <label>

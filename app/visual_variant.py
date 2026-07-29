@@ -767,6 +767,8 @@ def render_variant(
     )
     effects["english_subtitles"] = bool(subtitle_overlays)
     effects["english_subtitle_count"] = len(english_subtitles or [])
+    effects["english_subtitle_delivery"] = "burned_in" if subtitle_overlays else "none"
+    effects["english_subtitle_style"] = "yellow_black_outline" if subtitle_overlays else "none"
     render_target = body_path if effects.get("effect_hook_clip") else temp_path
 
     try:
