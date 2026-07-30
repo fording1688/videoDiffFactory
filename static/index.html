@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Video Variant Studio</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.3.11" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.5.4" />
 </head>
 <body>
   <main class="shell">
@@ -117,6 +117,110 @@
               线程数
               <input id="workerCount" name="worker_count" type="number" min="1" max="8" value="3" />
             </label>
+          </div>
+
+          <div class="hook-panel advanced-panel">
+            <label class="check-row compact-check">
+              <input id="advancedPipeline" name="advanced_pipeline" type="checkbox" />
+              启用高级单次渲染流水线（VideoProcessor + VideoAugmentor + AudioProcessor）
+            </label>
+            <p class="hint">启用后使用下方高级参数；每个输出版本独立随机，视频与音频在同一 FFmpeg filtergraph 中完成。</p>
+            <div class="field-row three-col">
+              <label>裁剪最小比例
+                <input name="advanced_crop_min" type="number" min="0" max="0.15" step="0.001" value="0.02" />
+              </label>
+              <label>裁剪最大比例
+                <input name="advanced_crop_max" type="number" min="0" max="0.15" step="0.001" value="0.05" />
+              </label>
+              <label>输出帧率
+                <select name="advanced_fps"><option value="0" selected>每个版本随机 30/60 FPS</option><option value="30">固定 30 FPS</option><option value="60">固定 60 FPS</option></select>
+              </label>
+              <label>输出分辨率
+                <select name="advanced_resolution"><option value="720p" selected>720P（快速，推荐）</option><option value="1080p">1080P（高清）</option><option value="source">跟随原视频</option></select>
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label>变速范围
+                <span class="inline-values"><input name="advanced_speed_min" type="number" min="0.5" max="2" step="0.001" value="1.015" /><input name="advanced_speed_max" type="number" min="0.5" max="2" step="0.001" value="1.045" /></span>
+              </label>
+              <label>色彩/饱和度增益
+                <span class="inline-values"><input name="advanced_color_min" type="number" min="0.5" max="2" step="0.01" value="0.98" /><input name="advanced_color_max" type="number" min="0.5" max="2" step="0.01" value="1.03" /></span>
+              </label>
+              <label>头部剪切范围（秒）
+                <span class="inline-values"><input name="advanced_head_min" type="number" min="0" step="0.1" value="0.2" /><input name="advanced_head_max" type="number" min="0" step="0.1" value="0.5" /></span>
+              </label>
+              <label>尾部剪切范围（秒）
+                <span class="inline-values"><input name="advanced_tail_min" type="number" min="0" step="0.1" value="0.3" /><input name="advanced_tail_max" type="number" min="0" step="0.1" value="0.6" /></span>
+              </label>
+            </div>
+            <div class="switches advanced-switches">
+              <label><input name="advanced_interpolate" type="checkbox" /> 光流平滑插帧（很慢）</label>
+              <label><input name="advanced_blur_bottom" type="checkbox" /> 模糊底部 12%</label>
+              <label><input name="advanced_border" type="checkbox" /> 可见 1–2px 边框</label>
+              <label><input name="advanced_reverb" type="checkbox" /> 3% 房间混响</label>
+              <label><input name="advanced_pip_enabled" type="checkbox" /> 启用可见画中画（默认关闭）</label>
+            </div>
+            <div class="field-row three-col">
+              <label>模糊强度随机范围
+                <span class="inline-values"><input name="advanced_blur_sigma_min" type="number" min="0.1" max="100" step="0.1" value="14" /><input name="advanced_blur_sigma_max" type="number" min="0.1" max="100" step="0.1" value="22" /></span>
+              </label>
+              <label>EQ 段数
+                <select name="advanced_eq_bands"><option value="0" selected>每个版本随机 3/5 段</option><option value="3">固定 3 段</option><option value="5">固定 5 段</option></select>
+              </label>
+              <label>水印透明度
+                <input name="advanced_watermark_opacity" type="number" min="0.15" max="1" step="0.01" value="0.22" />
+              </label>
+            </div>
+            <div class="field-row three-col">
+              <label>全屏风格模式
+                <select name="advanced_style_mode">
+                  <option value="film" selected>胶片 Film</option>
+                  <option value="warm">暖色 Warm</option>
+                  <option value="cool">冷色 Cool</option>
+                  <option value="vignette">暗角 Vignette</option>
+                </select>
+              </label>
+              <label>风格滤镜透明度
+                <input name="advanced_style_opacity" type="number" min="0.05" max="0.15" step="0.01" value="0.10" />
+              </label>
+              <label>颗粒强度
+                <input name="advanced_style_grain" type="number" min="0" max="5" step="0.1" value="1.2" />
+              </label>
+              <label>水印宽度比例
+                <input name="advanced_watermark_width" type="number" min="0.05" max="0.4" step="0.01" value="0.12" />
+              </label>
+            </div>
+            <div class="field-row two-col">
+              <label>品牌水印本地路径
+                <input name="advanced_watermark_path" type="text" placeholder="/Users/name/assets/brand.png" />
+              </label>
+              <label>画中画本地路径
+                <input name="advanced_pip_path" type="text" placeholder="/Users/name/assets/pip.mp4" />
+              </label>
+              <label>环境音本地路径（需有使用权）
+                <input name="advanced_ambient_path" type="text" placeholder="/Users/name/assets/room-tone.wav" />
+              </label>
+              <label>环境音音量（dB，最高 -35）
+                <input name="advanced_ambient_db" type="number" max="-35" step="1" value="-40" />
+              </label>
+              <label>BGM 本地路径（需有使用权）
+                <input name="advanced_bgm_path" type="text" placeholder="/Users/name/assets/licensed-bgm.mp3" />
+              </label>
+              <label>BGM 音量（dB）
+                <input name="advanced_bgm_db" type="number" max="0" step="1" value="-24" />
+              </label>
+              <label>项目编码名称
+                <input name="advanced_project_name" type="text" value="VideoVariantStudio" />
+              </label>
+              <label>项目版本
+                <input name="advanced_project_version" type="text" value="0.5.4" />
+              </label>
+            </div>
+            <div class="advanced-actions">
+              <button id="randomizeAdvancedParameters" class="secondary" type="button">随机一组参数</button>
+              <button id="saveAdvancedResources" class="secondary" type="button">保存固定素材</button>
+              <span id="advancedSettingsStatus" class="hint">固定素材保存在项目外，重启后自动恢复。</span>
+            </div>
           </div>
 
           <div class="switches">
@@ -334,11 +438,18 @@
                   <input id="dramaGroupParallelism" type="number" min="1" max="4" value="1" />
                 </label>
                 <label>
+                  每个发布批次的剧集数
+                  <input id="dramaPublishBatchSize" type="number" min="2" max="20" value="5" />
+                </label>
+              </div>
+              <div class="field-row">
+                <label>
                   扫描预览
                   <button id="scanDramaRootButton" class="secondary" type="button">扫描目录</button>
                 </label>
               </div>
               <p id="dramaRootScanResult" class="hint">只扫描源根目录的一级子文件夹；每个含视频的文件夹会成为一组任务。</p>
+              <p class="hint">文件名按“剧ID_001.mp4”连续编号；优先从文件夹名提取 4 位以上数字作为剧 ID。全部完成后会生成跨剧集的 发布批次.txt/json，不重复复制视频。</p>
               <p class="hint">源子文件夹里的所有 TXT 会原名复制到同名输出文件夹；其中 介绍.txt 可作为该组介绍。</p>
             </div>
             <div id="dramaManualModeFields">
@@ -351,6 +462,10 @@
               <input id="dramaFolder" name="folder_files" type="file" multiple webkitdirectory />
             </label>
             <div class="field-row">
+              <label>
+                剧 ID
+                <input id="dramaId" name="drama_id" type="text" placeholder="例如 55647322；留空时使用输出文件夹名" />
+              </label>
               <label>
                 最终视频输出目录
                 <span class="path-picker">
@@ -455,6 +570,6 @@
       </section>
     </section>
   </main>
-  <script src="/static/app.js?v=0.3.11"></script>
+  <script src="/static/app.js?v=0.5.4"></script>
 </body>
 </html>

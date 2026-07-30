@@ -6,6 +6,7 @@ import shutil
 import mimetypes
 import os
 import platform
+import random
 import re
 import threading
 import traceback
@@ -22,6 +23,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ai_provider import AIProvider
+from .advanced_settings import load_advanced_settings, save_advanced_settings
 from .baidu_pan import (
     BaiduPanError,
     authorization_url as baidu_authorization_url,
@@ -40,6 +42,7 @@ from .drama_factory import options_from_tool_options, render_drama_factory
 from .drama_reel_analyzer import DramaReelOptions, analyze_drama_reels, generate_reels_from_plan, render_single_reel
 from .models import BatchUploadResponse, DownloadUrlRequest, TaskState, UploadResponse, VariantOptions, VariantTask
 from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem, user_data_root
+from .video_augmentor import VideoAugmentor
 from .visual_variant import merge_videos, render_variant, selected_video_encoder, split_video_by_random_range
 
 
@@ -96,7 +99,7 @@ def _worker_cap() -> int:
 MAX_WORKER_CAP = _worker_cap()
 EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKER_CAP, thread_name_prefix="variant-worker")
 CLOUD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="baidu-upload")
-APP_VERSION = "0.3.13"
+APP_VERSION = "0.5.5"
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
 
 app = FastAPI(
@@ -228,8 +231,142 @@ def _scan_drama_source_root(source_root: Path) -> list[dict[str, Any]]:
             key=_natural_path_key,
         )
         if videos:
-            groups.append({"name": folder.name, "path": folder, "videos": videos})
+            groups.append({
+                "name": folder.name,
+                "drama_id": _drama_id_from_group_name(folder.name),
+                "path": folder,
+                "videos": videos,
+            })
     return groups
+
+
+def _drama_id_from_group_name(group_name: str) -> str:
+    """Derive a stable filename-safe drama ID from a source folder name."""
+    cleaned = str(group_name or "").strip()
+    numeric_id = re.search(r"(?<!\d)(\d{4,})(?!\d)", cleaned)
+    return safe_stem(numeric_id.group(1) if numeric_id else cleaned or "drama")
+
+
+def _normalize_drama_id(value: str | None, fallback: str = "drama") -> str:
+    return safe_stem(str(value or "").strip() or fallback)
+
+
+def _next_drama_sequence(output_dir: Path, drama_id: str) -> int:
+    """Continue after existing ``DRAMA_ID_001.mp4`` files instead of overwriting."""
+    pattern = re.compile(rf"^{re.escape(drama_id)}_(\d+)\.mp4$", re.IGNORECASE)
+    existing = [
+        int(match.group(1))
+        for path in output_dir.iterdir()
+        if path.is_file() and (match := pattern.match(path.name))
+    ]
+    return max(existing, default=0) + 1
+
+
+def _build_cross_drama_publish_batches(
+    groups: list[dict[str, Any]],
+    *,
+    batch_size: int = 5,
+) -> list[dict[str, Any]]:
+    """Round-robin final videos so one publishing batch favours distinct dramas."""
+    safe_batch_size = max(2, min(int(batch_size or 5), 20))
+    queues = [
+        {
+            "drama_id": str(group["drama_id"]),
+            "group_name": str(group["group_name"]),
+            "files": list(group.get("files") or []),
+        }
+        for group in groups
+        if group.get("files")
+    ]
+    batches: list[dict[str, Any]] = []
+    cursor = 0
+    while any(queue["files"] for queue in queues):
+        active = [queue for queue in queues if queue["files"]]
+        if not active:
+            break
+        offset = cursor % len(active)
+        ordered = active[offset:] + active[:offset]
+        files = [
+            {
+                "drama_id": queue["drama_id"],
+                "group_name": queue["group_name"],
+                "file": queue["files"].pop(0),
+            }
+            for queue in ordered[:safe_batch_size]
+        ]
+        batches.append({
+            "batch": len(batches) + 1,
+            "drama_count": len({item["drama_id"] for item in files}),
+            "files": files,
+        })
+        cursor += 1
+    return batches
+
+
+def _maybe_write_root_publish_plan(task: VariantTask) -> Path | None:
+    """Write the cross-drama plan once every group in a root batch has rendered."""
+    if not bool(task.tool_options.get("root_batch")):
+        return None
+    with TASK_LOCK:
+        siblings = [
+            item
+            for item in TASKS.values()
+            if item.batch_id == task.batch_id and bool(item.tool_options.get("root_batch"))
+        ]
+        expected = int(task.tool_options.get("root_group_total") or len(siblings))
+        if len(siblings) != expected or any(not item.effects.get("final_dir") for item in siblings):
+            return None
+        snapshot = sorted(siblings, key=lambda item: int(item.tool_options.get("root_group_position") or 0))
+
+    output_root = Path(str(task.tool_options.get("root_output_dir") or "")).expanduser()
+    if not output_root.is_dir():
+        return None
+    groups: list[dict[str, Any]] = []
+    for item in snapshot:
+        final_dir = Path(str(item.effects.get("final_dir") or ""))
+        drama_id = _normalize_drama_id(
+            str(item.tool_options.get("drama_id") or ""),
+            str(item.tool_options.get("source_group_name") or "drama"),
+        )
+        files = [
+            str(path.relative_to(output_root))
+            for path in sorted(final_dir.glob(f"{drama_id}_*.mp4"), key=_natural_path_key)
+            if path.is_file()
+        ]
+        groups.append({
+            "drama_id": drama_id,
+            "group_name": str(item.tool_options.get("source_group_name") or drama_id),
+            "files": files,
+        })
+
+    batch_size = int(task.tool_options.get("publish_batch_size") or 5)
+    batches = _build_cross_drama_publish_batches(groups, batch_size=batch_size)
+    plan = {
+        "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "batch_size": batch_size,
+        "strategy": "每批优先选择不同剧 ID，每个剧集最多一条",
+        "group_count": len(groups),
+        "video_count": sum(len(group["files"]) for group in groups),
+        "batch_count": len(batches),
+        "batches": batches,
+    }
+    json_path = output_root / "发布批次.json"
+    text_path = output_root / "发布批次.txt"
+    json_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    text_lines = [
+        f"共 {plan['video_count']} 个视频，{plan['batch_count']} 个发布批次；每批最多 {batch_size} 个不同剧集。",
+        "",
+    ]
+    for batch in batches:
+        text_lines.append(f"第 {batch['batch']:03d} 批（{batch['drama_count']} 个剧集）")
+        text_lines.extend(f"  {item['drama_id']}  {item['file']}" for item in batch["files"])
+        text_lines.append("")
+    text_path.write_text("\n".join(text_lines), encoding="utf-8")
+    with TASK_LOCK:
+        for item in snapshot:
+            item.effects["publish_plan_path"] = str(json_path)
+            item.effects["publish_plan_text_path"] = str(text_path)
+    return json_path
 
 
 def _folder_intro_text(folder: Path, fallback: str) -> str:
@@ -474,7 +611,8 @@ def _render_task(task: VariantTask) -> None:
         input_video = task.input_path
         output_dir = _task_output_dir(task)
         english_subtitles: list[dict[str, Any]] = []
-        if bool(task.tool_options.get("effect_english_subtitles")):
+        advanced_pipeline = bool(task.tool_options.get("advanced_pipeline"))
+        if bool(task.tool_options.get("effect_english_subtitles")) and not advanced_pipeline:
             _set(task, progress=9, message="正在识别中文对白并翻译为英文字幕")
             subtitle_work = WORK_DIR / "english_subtitles" / task.task_id
             english_subtitles = translate_chinese_speech(
@@ -491,15 +629,26 @@ def _render_task(task: VariantTask) -> None:
             progress = 12 + int((index - 1) / total * 78)
             _set(task, progress=progress, message=f"正在生成第 {index}/{total} 个视觉版本")
             variant_task_id = f"{task.task_id}v{index:02d}"
-            output_path, effects, info = render_variant(
-                input_video=input_video,
-                output_dir=output_dir,
-                task_id=variant_task_id,
-                options=task.options,
-                output_stem=_variant_output_stem(task, index),
-                english_subtitles=english_subtitles,
-                cancel_task_id=task.task_id,
-            )
+            if advanced_pipeline:
+                output_path = output_dir / f"{_variant_output_stem(task, index)}.mp4"
+                parameters = _advanced_augmentor_parameters(task, variant_task_id)
+                plan = VideoAugmentor(parameters).process(
+                    input_video,
+                    output_path,
+                    task_id=task.task_id,
+                )
+                info = get_video_info(output_path)
+                effects = {"pipeline": "advanced", "plan": plan.as_dict(), "parameters": parameters}
+            else:
+                output_path, effects, info = render_variant(
+                    input_video=input_video,
+                    output_dir=output_dir,
+                    task_id=variant_task_id,
+                    options=task.options,
+                    output_stem=_variant_output_stem(task, index),
+                    english_subtitles=english_subtitles,
+                    cancel_task_id=task.task_id,
+                )
             variant_paths.append(str(output_path))
             effects_by_version[f"version_{index:02d}"] = effects
 
@@ -519,6 +668,134 @@ def _render_task(task: VariantTask) -> None:
         task.error = str(exc)
         task.effects["traceback"] = traceback.format_exc(limit=6)
         _set(task, status=TaskState.failed, progress=100, message="处理失败")
+
+
+def _advanced_augmentor_parameters(task: VariantTask, variant_task_id: str) -> dict[str, Any]:
+    """把网页配置转换为单次 FFmpeg 高级流水线参数。"""
+    options = task.tool_options
+    rng = random.Random(variant_task_id)
+    crop_min = max(0.0, min(float(options.get("advanced_crop_min") or 0.02), 0.15))
+    crop_max = max(crop_min, min(float(options.get("advanced_crop_max") or 0.05), 0.15))
+    speed_min = max(0.5, min(float(options.get("advanced_speed_min") or 1.015), 2.0))
+    speed_max = max(speed_min, min(float(options.get("advanced_speed_max") or 1.045), 2.0))
+    head_min = max(0.0, float(options.get("advanced_head_min") or 0.2))
+    head_max = max(head_min, float(options.get("advanced_head_max") or 0.5))
+    tail_min = max(0.0, float(options.get("advanced_tail_min") or 0.3))
+    tail_max = max(tail_min, float(options.get("advanced_tail_max") or 0.6))
+    head_trim = rng.uniform(head_min, head_max)
+    tail_trim = rng.uniform(tail_min, tail_max)
+    source_duration = get_video_info(task.input_path).duration
+    if source_duration <= head_trim + tail_trim + 0.2:
+        head_trim = tail_trim = 0.0
+    saturation_min = max(0.5, min(float(options.get("advanced_color_min") or 0.98), 2.0))
+    saturation_max = max(saturation_min, min(float(options.get("advanced_color_max") or 1.03), 2.0))
+    layering = {
+        "pink_noise": {"enabled": False, "volume_db": -42.0},
+        "ambient_path": str(options.get("advanced_ambient_path") or "").strip() or None,
+        "ambient_volume_db": min(float(options.get("advanced_ambient_db") or -40.0), -35.0),
+        "bgm_path": str(options.get("advanced_bgm_path") or "").strip() or None,
+        "bgm_volume_db": float(options.get("advanced_bgm_db") or -24.0),
+        "bgm_fade_in": 1.5,
+        "bgm_fade_out": 2.0,
+        "source_duck_db": -0.7,
+    }
+    return {
+        "profile": "balanced",
+        "seed": rng.randrange(0, 2**32),
+        "spatial": {
+            "crop_percent": [crop_min, crop_max],
+            "target_resolution": (
+                str(options.get("advanced_resolution") or "720p")
+                if str(options.get("advanced_resolution") or "720p") in {"source", "720p", "1080p"}
+                else "720p"
+            ),
+            "scale_flags": "fast_bilinear",
+        },
+        "color": {
+            "brightness": [-0.01, 0.01],
+            "contrast": [saturation_min, saturation_max],
+            "saturation": [saturation_min, saturation_max],
+            "hue_degrees": [-1.0, 1.0],
+            "dynamic_jitter": 0.005,
+        },
+        "temporal": {
+            "speed": [speed_min, speed_max],
+            "trim_head_seconds": head_trim,
+            "trim_tail_seconds": tail_trim,
+            "target_fps": (
+                rng.choice((30, 60))
+                if int(options.get("advanced_fps") or 0) == 0
+                else (60 if int(options.get("advanced_fps") or 30) == 60 else 30)
+            ),
+            "fps_mode": "interpolate" if bool(options.get("advanced_interpolate")) else "resample",
+        },
+        "audio": {
+            "pitch_semitones": [-0.3, 0.3],
+            "eq": {
+                "enabled": True,
+                "bands": (
+                    rng.choice((3, 5))
+                    if int(options.get("advanced_eq_bands") or 0) == 0
+                    else (3 if int(options.get("advanced_eq_bands") or 5) == 3 else 5)
+                ),
+            },
+            "stereo": {"enabled": True, "width": 1.08, "haas_delay_ms": [6.0, 14.0]},
+            "reverb": {"enabled": bool(options.get("advanced_reverb")), "wet": 0.03},
+            "layering": layering,
+        },
+        "region": {
+            "enabled": bool(options.get("advanced_blur_bottom")),
+            "x": 0.0, "y": 0.88, "width": 1.0, "height": 0.12,
+            "blur_sigma": rng.uniform(
+                max(0.1, float(options.get("advanced_blur_sigma_min") or 14.0)),
+                max(
+                    max(0.1, float(options.get("advanced_blur_sigma_min") or 14.0)),
+                    float(options.get("advanced_blur_sigma_max") or 22.0),
+                ),
+            ),
+        },
+        "composition": {
+            "watermark": {
+                "path": str(options.get("advanced_watermark_path") or "").strip() or None,
+                "opacity": max(0.15, min(float(options.get("advanced_watermark_opacity") or 0.22), 1.0)),
+                "width_ratio": max(0.05, min(float(options.get("advanced_watermark_width") or 0.12), 0.4)),
+                "position": "top_right", "margin": 24,
+            },
+            "style_overlay": {
+                "enabled": True,
+                "mode": (
+                    str(options.get("advanced_style_mode") or "film")
+                    if str(options.get("advanced_style_mode") or "film") in {"film", "warm", "cool", "vignette"}
+                    else "film"
+                ),
+                "opacity": max(0.05, min(float(options.get("advanced_style_opacity") or 0.10), 0.15)),
+                "grain_strength": max(0.0, min(float(options.get("advanced_style_grain") or 1.2), 5.0)),
+            },
+            "pip": {
+                "path": (
+                    str(options.get("advanced_pip_path") or "").strip() or None
+                    if bool(options.get("advanced_pip_enabled"))
+                    else None
+                ),
+                "width_ratio": 0.30, "position": "bottom_right", "margin": 24,
+                "start": 1.0, "end": None,
+            },
+            "border": {
+                "enabled": bool(options.get("advanced_border")),
+                "width": rng.choice((1, 2)), "color": "white@0.9",
+            },
+        },
+        "metadata": {
+            "strip_all": True,
+            "project_name": str(options.get("advanced_project_name") or "VideoVariantStudio"),
+            "project_version": str(options.get("advanced_project_version") or APP_VERSION),
+            "comment": "Authorized web creative variant",
+        },
+        "output": {
+            "video_codec": "auto", "codec_family": "h264", "video_bitrate": "4M",
+            "preset": "ultrafast", "crf": 25, "audio_bitrate": "192k", "pixel_format": "yuv420p",
+        },
+    }
 
 
 def _zip_outputs(zip_path: Path, paths: list[Path]) -> Path:
@@ -653,6 +930,7 @@ def _render_tool_task(task: VariantTask) -> None:
             task.output_count = len(paths)
             task.output_path = str(paths[0]) if paths else str(manifest_path)
             task.effects = metadata
+            _maybe_write_root_publish_plan(task)
             _finish_task(task, f"整集 Reel 批处理完成，共 {len(paths)} 个视频")
             return
 
@@ -982,6 +1260,11 @@ def _render_drama_batch_reels(
     work_root.mkdir(parents=True, exist_ok=True)
     for directory in (merged_dir, split_dir, final_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    drama_id = _normalize_drama_id(
+        str(task.tool_options.get("drama_id") or ""),
+        str(task.tool_options.get("source_group_name") or Path(final_dir).name or "drama"),
+    )
+    first_output_sequence = _next_drama_sequence(final_dir, drama_id)
     _write_intro_file(final_dir, str(task.tool_options.get("intro_text") or ""))
     source_text_dir = str(task.tool_options.get("source_text_dir") or "").strip()
     copied_text_files = _copy_source_text_files(Path(source_text_dir), final_dir) if source_text_dir else []
@@ -1036,12 +1319,13 @@ def _render_drama_batch_reels(
             if task.cancel_requested or is_cancel_requested(task.task_id):
                 raise CancelledTask("任务已取消。")
             variant_id = f"{task.task_id}_p{part_index:04d}_v{version_index:02d}"
+            output_sequence = first_output_sequence + output_number - 1
             output_path, effects, _ = render_variant(
                 input_video=base_path,
                 output_dir=final_dir,
                 task_id=variant_id,
                 options=variant_options,
-                output_stem=f"{output_number:03d}",
+                output_stem=f"{drama_id}_{output_sequence:03d}",
                 english_subtitles=slice_segments(
                     english_subtitles,
                     float(part.get("start") or 0),
@@ -1051,6 +1335,8 @@ def _render_drama_batch_reels(
             )
             return {
                 "output_number": output_number,
+                "output_sequence": output_sequence,
+                "drama_id": drama_id,
                 "part": part_index,
                 "version": version_index,
                 "start": part["start"],
@@ -1079,6 +1365,9 @@ def _render_drama_batch_reels(
             "worker_count": worker_count,
             "segment_range": [min_seconds, max_seconds],
             "output_count": len(outputs),
+            "drama_id": drama_id,
+            "first_output_sequence": first_output_sequence,
+            "last_output_sequence": first_output_sequence + len(outputs) - 1,
             "english_subtitle_count": len(english_subtitles),
             "batch_root": str(batch_root),
             "final_dir": str(final_dir),
@@ -1377,6 +1666,18 @@ def version() -> dict[str, Any]:
     return _version_info()
 
 
+@app.get("/api/advanced-settings")
+def advanced_settings() -> dict[str, Any]:
+    return {"ok": True, "config_path": str(DATA_DIR / "advanced_pipeline.json"), **load_advanced_settings(DATA_DIR)}
+
+
+@app.post("/api/advanced-settings")
+def update_advanced_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    # 本地桌面应用仅保存路径。路径存在性仍会在创建处理任务时再次校验。
+    saved = save_advanced_settings(DATA_DIR, payload)
+    return {"ok": True, "config_path": str(DATA_DIR / "advanced_pipeline.json"), **saved}
+
+
 @app.get("/api/cloud/baidu/status")
 def baidu_cloud_status() -> dict[str, Any]:
     return {"ok": True, **baidu_public_status(load_baidu_config(DATA_DIR))}
@@ -1537,6 +1838,27 @@ async def upload_video(
     workers = _sanitize_worker_count(worker_count)
     resolved_output_dir = _resolve_output_dir(output_dir)
     _write_intro_file(resolved_output_dir, intro_text)
+    if advanced_pipeline:
+        asset_values = {
+            "品牌水印": advanced_watermark_path,
+            "画中画": advanced_pip_path,
+            "环境音": advanced_ambient_path,
+            "BGM": advanced_bgm_path,
+        }
+        resolved_assets: dict[str, str] = {}
+        for label, value in asset_values.items():
+            cleaned = str(value or "").strip()
+            if not cleaned:
+                resolved_assets[label] = ""
+                continue
+            asset_path = Path(cleaned).expanduser()
+            if not asset_path.is_file():
+                raise HTTPException(status_code=400, detail=f"{label}素材路径不存在：{asset_path}")
+            resolved_assets[label] = str(asset_path.resolve())
+        advanced_watermark_path = resolved_assets["品牌水印"]
+        advanced_pip_path = resolved_assets["画中画"]
+        advanced_ambient_path = resolved_assets["环境音"]
+        advanced_bgm_path = resolved_assets["BGM"]
     batch_id = uuid.uuid4().hex[:12]
     task = VariantTask(
         task_id=task_id,
@@ -1802,6 +2124,7 @@ def scan_drama_reel_root(payload: dict[str, Any] = Body(default_factory=dict)) -
         "groups": [
             {
                 "name": group["name"],
+                "drama_id": group["drama_id"],
                 "video_count": len(group["videos"]),
                 "text_count": sum(1 for path in group["path"].iterdir() if path.is_file() and path.suffix.lower() == ".txt"),
                 "preview": [path.name for path in group["videos"][:5]],
@@ -1843,6 +2166,7 @@ def create_drama_reel_root_batch(payload: dict[str, Any] = Body(default_factory=
         group_parallelism = max(1, min(int(payload.get("group_parallelism") or 1), 4))
         safe_min_seconds = max(5.0, min(float(payload.get("min_seconds") or 28), 90.0))
         safe_max_seconds = max(safe_min_seconds, min(float(payload.get("max_seconds") or 30), 120.0))
+        publish_batch_size = max(2, min(int(payload.get("publish_batch_size") or 5), 20))
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="线程数、版本数或切分秒数格式不正确。") from exc
 
@@ -1884,7 +2208,10 @@ def create_drama_reel_root_batch(payload: dict[str, Any] = Body(default_factory=
                 "subtitle_model": subtitle_model if subtitle_model in {"tiny", "base", "small", "medium"} else "base",
                 "direct_output": True,
                 "root_batch": True,
+                "root_output_dir": str(output_root),
                 "source_group_name": str(group["name"]),
+                "drama_id": str(group["drama_id"]),
+                "publish_batch_size": publish_batch_size,
                 "root_group_position": index,
                 "root_group_total": len(groups),
                 "group_parallelism": group_parallelism,
@@ -1903,6 +2230,7 @@ async def drama_reels_batch(
     output_dir: str = Form(""),
     cloud_group_id: str = Form(""),
     cloud_folder_name: str = Form(""),
+    drama_id: str = Form(""),
     max_episodes: int = Form(20),
     versions_per_episode: int = Form(1),
     worker_count: int = Form(3),
@@ -2011,6 +2339,10 @@ async def drama_reels_batch(
             "intro_text": intro_text,
             "cloud_group_id": cloud_group_id.strip(),
             "cloud_folder_name": cloud_folder_name.strip(),
+            "drama_id": _normalize_drama_id(
+                drama_id,
+                cloud_folder_name.strip() or Path(resolved_output_dir).name or "drama",
+            ),
             "effect_english_subtitles": effect_english_subtitles,
             "subtitle_model": subtitle_model if subtitle_model in {"tiny", "base", "small", "medium"} else "base",
         },
@@ -2095,6 +2427,40 @@ async def upload_batch(
     cloud_folder_name: str = Form(""),
     effect_english_subtitles: bool = Form(False),
     subtitle_model: str = Form("base"),
+    advanced_pipeline: bool = Form(False),
+    advanced_crop_min: float = Form(0.02),
+    advanced_crop_max: float = Form(0.05),
+    advanced_speed_min: float = Form(1.015),
+    advanced_speed_max: float = Form(1.045),
+    advanced_head_min: float = Form(0.2),
+    advanced_head_max: float = Form(0.5),
+    advanced_tail_min: float = Form(0.3),
+    advanced_tail_max: float = Form(0.6),
+    advanced_color_min: float = Form(0.98),
+    advanced_color_max: float = Form(1.03),
+    advanced_fps: int = Form(0),
+    advanced_resolution: str = Form("720p"),
+    advanced_interpolate: bool = Form(False),
+    advanced_blur_bottom: bool = Form(False),
+    advanced_blur_sigma_min: float = Form(14.0),
+    advanced_blur_sigma_max: float = Form(22.0),
+    advanced_border: bool = Form(False),
+    advanced_eq_bands: int = Form(0),
+    advanced_reverb: bool = Form(False),
+    advanced_watermark_path: str = Form(""),
+    advanced_watermark_opacity: float = Form(0.22),
+    advanced_watermark_width: float = Form(0.12),
+    advanced_style_mode: str = Form("film"),
+    advanced_style_opacity: float = Form(0.10),
+    advanced_style_grain: float = Form(1.2),
+    advanced_pip_path: str = Form(""),
+    advanced_pip_enabled: bool = Form(False),
+    advanced_ambient_path: str = Form(""),
+    advanced_ambient_db: float = Form(-40.0),
+    advanced_bgm_path: str = Form(""),
+    advanced_bgm_db: float = Form(-24.0),
+    advanced_project_name: str = Form("VideoVariantStudio"),
+    advanced_project_version: str = Form(APP_VERSION),
 ) -> BatchUploadResponse:
     if not files:
         raise HTTPException(status_code=400, detail="请至少上传一个视频文件。")
@@ -2176,6 +2542,40 @@ async def upload_batch(
                 "cloud_folder_name": cloud_folder_name.strip(),
                 "effect_english_subtitles": effect_english_subtitles,
                 "subtitle_model": subtitle_model if subtitle_model in {"tiny", "base", "small", "medium"} else "base",
+                "advanced_pipeline": advanced_pipeline,
+                "advanced_crop_min": advanced_crop_min,
+                "advanced_crop_max": advanced_crop_max,
+                "advanced_speed_min": advanced_speed_min,
+                "advanced_speed_max": advanced_speed_max,
+                "advanced_head_min": advanced_head_min,
+                "advanced_head_max": advanced_head_max,
+                "advanced_tail_min": advanced_tail_min,
+                "advanced_tail_max": advanced_tail_max,
+                "advanced_color_min": advanced_color_min,
+                "advanced_color_max": advanced_color_max,
+                "advanced_fps": advanced_fps,
+                "advanced_resolution": advanced_resolution,
+                "advanced_interpolate": advanced_interpolate,
+                "advanced_blur_bottom": advanced_blur_bottom,
+                "advanced_blur_sigma_min": advanced_blur_sigma_min,
+                "advanced_blur_sigma_max": advanced_blur_sigma_max,
+                "advanced_border": advanced_border,
+                "advanced_eq_bands": advanced_eq_bands,
+                "advanced_reverb": advanced_reverb,
+                "advanced_watermark_path": advanced_watermark_path.strip(),
+                "advanced_watermark_opacity": advanced_watermark_opacity,
+                "advanced_watermark_width": advanced_watermark_width,
+                "advanced_style_mode": advanced_style_mode,
+                "advanced_style_opacity": advanced_style_opacity,
+                "advanced_style_grain": advanced_style_grain,
+                "advanced_pip_path": advanced_pip_path.strip(),
+                "advanced_pip_enabled": advanced_pip_enabled,
+                "advanced_ambient_path": advanced_ambient_path.strip(),
+                "advanced_ambient_db": advanced_ambient_db,
+                "advanced_bgm_path": advanced_bgm_path.strip(),
+                "advanced_bgm_db": advanced_bgm_db,
+                "advanced_project_name": advanced_project_name.strip() or "VideoVariantStudio",
+                "advanced_project_version": advanced_project_version.strip() or APP_VERSION,
             },
         )
         with TASK_LOCK:

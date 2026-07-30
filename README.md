@@ -14,6 +14,8 @@
 - 输出 1080x1920 竖屏 MP4
 - 处理视频和 Short Drama 成品直接保存到指定输出目录，不在任务卡重复提供下载
 - Short Drama 支持根目录批量模式：每个一级子文件夹自动作为一组，输出到目标根目录下的同名文件夹，并复制源目录中的 TXT 文件
+- Short Drama 成品使用 `剧ID_001.mp4` 连续编号；同目录再次处理会从已有最大序号继续，避免覆盖
+- 根目录批量完成后生成 `发布批次.txt` 和 `发布批次.json`，每批优先从 5 个不同剧集各选 1 条且不重复复制视频
 - 处理视频和 Short Drama 可把中文对白翻译成英文，以黄色粗体和黑色描边直接烧录到画面，不生成平台字幕轨道
 - 正在排队或处理中的任务支持手动停止，会尝试终止对应 FFmpeg 子进程
 - 独立合并多个视频，按选择顺序输出一个 MP4
@@ -158,6 +160,218 @@ runtime/ffmpeg/linux-x64/
 ```txt
 runtime/ffmpeg/README.md
 ```
+
+## 模块化视频增强流水线
+
+`app.video_augmentor.VideoAugmentor` 可在现有任务流程或独立脚本中调用。它将空间、颜色、画质、
+时域、音频和合成操作组织成一次 FFmpeg 滤镜图，减少重复编解码；每次输出还会生成
+`*.augmentation.json` 参数清单，用相同 `seed` 可复现 A/B 测试版本。
+
+```python
+from app.video_augmentor import VideoAugmentor
+
+parameters = {
+    "profile": "balanced",                 # light / balanced / strong
+    "seed": 20260729,                       # None 表示每次随机
+    "spatial": {
+        "crop_percent": [0.02, 0.05],
+        "background": {
+            "enabled": True,
+            "mode": "gaussian",            # gaussian / box
+            "blur_sigma": 24,
+            "foreground_scale": 0.90,
+        },
+        "breathing_zoom": {"enabled": True, "amplitude": 0.018, "period_seconds": 6},
+    },
+    "temporal": {
+        "speed": [1.01, 1.05],              # atempo 保持音高
+        "target_fps": 60,
+        "fps_mode": "interpolate",         # interpolate 光流插帧；resample 普通重采样
+    },
+    "audio": {
+        "pitch_semitones": [-0.3, 0.3],
+        "eq": {"enabled": True, "bands": 5, "highpass_hz": 70, "lowpass_hz": 15500},
+        "stereo": {"enabled": True, "width": 1.08, "haas_delay_ms": [6, 14]},
+        "reverb": {"enabled": True, "wet": 0.035},
+        "layering": {
+            "pink_noise": {"enabled": True, "volume_db": -42},
+            "ambient_path": "/path/to/room-tone.wav",
+            "ambient_volume_db": -40,
+            "bgm_path": "/path/to/bgm.mp3",
+            "bgm_volume_db": -24,
+            "bgm_fade_in": 1.5,
+            "bgm_fade_out": 2.0,
+        },
+    },
+    "composition": {
+        "watermark": {"path": "/path/to/logo.png", "opacity": 0.6, "position": "top_right"},
+        "pip": {"path": "/path/to/pip.mp4", "start": 2, "end": 8, "position": "bottom_right"},
+        "intro": {"path": "/path/to/intro.mp4", "transition": 0.5},
+        "outro": {"path": "/path/to/outro.mp4", "transition": 0.5},
+    },
+}
+
+augmentor = VideoAugmentor(parameters)
+plan = augmentor.process("input.mp4", "output.mp4")
+
+# 调试/任务队列集成时可只构建命令，不执行：
+command = augmentor.process("input.mp4", "output.mp4", dry_run=True)
+```
+
+声音模块也可以脱离视频流水线单独使用：
+
+```python
+from app.audio_processor import AudioProcessor
+
+audio = AudioProcessor({
+    "seed": 20260729,
+    "speed": [1.01, 1.05],
+    "pitch_semitones": [-0.3, 0.3],
+    "eq": {"bands": 3},
+    "reverb": {"wet": 0.03},
+})
+
+audio.process("input.mp4", "enhanced_audio.m4a")
+ffmpeg_command = audio.process("input.mp4", "enhanced_audio.m4a", dry_run=True)
+print(" ".join(ffmpeg_command))
+```
+
+完整默认参数及逐项注释见 `app/video_augmentor.py` 中的 `DEFAULT_PARAMETERS`。光流插帧比普通
+重采样慢很多，批量生成 60fps 版本时建议先用短片段评估耗时。
+
+## 常规视频编辑与隐私元数据清理
+
+`app.video_processor.VideoProcessor` 用于可审计的常规剪辑、局部字幕区域处理、品牌合成、
+帧率转换和转码。默认清除输入文件携带的隐私元数据，并写入真实的项目名称与版本信息。
+
+```python
+from app.video_processor import VideoProcessor
+
+processor = VideoProcessor({
+    "metadata": {
+        "strip_all": True,
+        "project_name": "MyVideoProject",
+        "project_version": "2.3.0",
+        "title": "Authorized edited master",
+        "comment": "Edited from licensed source material",
+    },
+    "region": {
+        "enabled": True,
+        "mode": "blur",             # blur 或 crop_bottom
+        "x": 0.0,
+        "y": 0.85,
+        "width": 1.0,
+        "height": 0.15,
+        "blur_sigma": 18,
+        "crop_bottom_ratio": 0.15,
+    },
+    "composition": {
+        "style_overlay": {
+            "enabled": True,
+            "mode": "film",          # film / warm / cool / contrast / vignette
+            "opacity": 0.18,
+            "grain_strength": 2.0,
+        },
+        "watermark": {
+            "path": "/path/to/brand.png",
+            "opacity": 0.25,
+            "width_ratio": 0.18,
+            "position": "top_right",
+            "margin": 24,
+        },
+        "pip": {
+            "enabled": False,         # 默认关闭独立区域画中画
+            "path": "/path/to/pip.mp4",
+            "width_ratio": 0.30,
+            "position": "bottom_right",
+            "start": 2.0,
+            "end": 8.0,
+        },
+        "border": {"enabled": True, "width": 4, "color": "white@0.9"},
+        "intro": {"path": "/path/to/brand-intro.mp4", "duration": 0.6, "fade": 0.2},
+        "outro": {"path": "/path/to/brand-outro.mp4", "duration": 0.6, "fade": 0.2},
+    },
+    "temporal": {
+        "trim_head_seconds": 0.2,
+        "trim_tail_seconds": 0.3,
+        # 也可以用 start_time / end_time 指定绝对时间点。
+        "target_fps": 30,
+    },
+    "quality": {
+        "sharpen": 0.30,
+        "contrast": 1.04,
+        "brightness": 0.0,
+        "saturation": 1.03,
+        "color_smoothing": 0.8,
+    },
+})
+
+plan = processor.process("input.mp4", "edited_output.mp4")
+command = processor.process("input.mp4", "edited_output.mp4", dry_run=True)
+```
+
+剪辑区间会同时应用到视频和音频，并分别重置时间戳，因此首尾剪辑后仍保持音画同步。
+全屏风格层由主画面自身生成调色版本后按 alpha 混合，不需要额外的不可见视频素材。
+
+网页高级面板中的固定水印、画中画、环境音和 BGM 路径保存在用户数据目录的
+`advanced_pipeline.json`，不写入源码项目。macOS 默认位置为：
+
+```txt
+~/Movies/VideoVariantStudio/advanced_pipeline.json
+```
+
+## 自动化批量处理
+
+`scripts/batch_video_pipeline.py` 会扫描 `.mp4 / .mov / .mkv`，为每个视频生成独立的随机
+裁剪、变速、首尾剪辑、色彩与帧率参数，再通过一个 FFmpeg filtergraph 完成视频、音频、
+区域模糊、品牌合成和元数据处理。单个文件失败只会写入 `batch_report.json`，不会中止批次。
+
+```bash
+# 默认输出 30fps，并发处理 3 个视频
+python scripts/batch_video_pipeline.py ./input ./output --workers 3
+
+# 30/60fps 随机选择、光流插帧、底部 12% 模糊、可见细边框
+python scripts/batch_video_pipeline.py ./input ./output \
+  --workers 3 --fps random --fps-mode interpolate \
+  --blur-bottom --border
+
+# 加入品牌素材、授权环境音和 BGM
+python scripts/batch_video_pipeline.py ./input ./output \
+  --watermark ./assets/brand.png \
+  --pip ./assets/pip.mp4 \
+  --ambient ./assets/room-tone.wav \
+  --bgm ./assets/licensed-bgm.mp3
+
+# 复现实验批次，或只检查生成的 FFmpeg 命令
+python scripts/batch_video_pipeline.py ./input ./output --seed 20260729 --dry-run
+```
+
+完整命令行参数：
+
+```bash
+python scripts/batch_video_pipeline.py --help
+```
+
+## 编码性能与硬件加速
+
+`VideoProcessor` 与 `VideoAugmentor` 默认使用 `video_codec=auto`。启动处理时会执行一帧真实
+测试编码，并按平台尝试 VideoToolbox、NVENC、QSV 或 AMF；测试失败自动降级到 `libx264`。
+检测结果会缓存，单次运行不会反复探测。
+
+```python
+"output": {
+    "video_codec": "auto",       # 也可指定 h264_nvenc / h264_qsv / h264_videotoolbox
+    "codec_family": "h264",      # h264 或 hevc
+    "video_bitrate": "4M",       # 硬件编码目标码率
+    "preset": "ultrafast",       # CPU仅允许 ultrafast / superfast
+    "crf": 25,                    # 自动限制在22-26；GPU侧作为质量值
+    "pixel_format": "yuv420p",
+}
+```
+
+所有输入与输出命令均显式使用 `-threads 0`、`-filter_threads 0` 和
+`-filter_complex_threads 0`，让 FFmpeg 自动利用可用 CPU 核心。光流插帧、
+动态缩放、去噪和复杂模糊仍由滤镜链计算；若追求速度，优先使用30fps与`resample`模式。
 
 常用下载地址：
 

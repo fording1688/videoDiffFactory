@@ -331,6 +331,28 @@ textarea {
 
 .subtitle-panel .hint { grid-column: 1 / -1; margin: 0; }
 
+.advanced-panel { margin: 22px 0; }
+
+.advanced-panel > .hint { margin: 0; }
+
+.advanced-switches { margin: 14px 0; }
+
+.inline-values {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.advanced-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.advanced-actions .hint { margin: 0; }
+
 .cache-panel {
   display: flex;
   flex-wrap: wrap;

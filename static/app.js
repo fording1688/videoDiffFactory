@@ -17,6 +17,9 @@ const chooseDramaRootOutputDirButton = document.getElementById('chooseDramaRootO
 const scanDramaRootButton = document.getElementById('scanDramaRootButton');
 const chooseMergeOutputDirButton = document.getElementById('chooseMergeOutputDir');
 const chooseSplitOutputDirButton = document.getElementById('chooseSplitOutputDir');
+const randomizeAdvancedButton = document.getElementById('randomizeAdvancedParameters');
+const saveAdvancedResourcesButton = document.getElementById('saveAdvancedResources');
+const advancedSettingsStatus = document.getElementById('advancedSettingsStatus');
 const tasks = new Map();
 const menuItems = document.querySelectorAll('.menu-item');
 const toolViews = document.querySelectorAll('[data-view-panel]');
@@ -264,7 +267,7 @@ async function scanDramaRoot() {
     });
     if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
-    const names = (data.groups || []).slice(0, 12).map(group => `${group.name}（${group.video_count} 个视频，${group.text_count} 个 TXT）`);
+    const names = (data.groups || []).slice(0, 12).map(group => `${group.name}［ID: ${group.drama_id}］（${group.video_count} 个视频，${group.text_count} 个 TXT）`);
     const more = data.group_count > names.length ? ` 等 ${data.group_count} 组` : '';
     if (result) result.textContent = `识别到 ${data.group_count} 组、共 ${data.video_count} 个视频：${names.join('；')}${more}`;
   } catch (error) {
@@ -285,6 +288,7 @@ function batchGroupTemplate(kind) {
   return `<article class="batch-group" data-batch-kind="${kind}">
     <div class="batch-group-header"><strong>附加目录组</strong><button class="danger-button remove-batch-group" type="button">删除本组</button></div>
     <label class="drop-zone compact-drop"><span>${isDrama ? '选择剧集文件夹' : '选择视频文件夹'}</span><input class="batch-folder-input" type="file" multiple webkitdirectory accept="${accept}" /></label>
+    ${isDrama ? '<label>剧 ID<input class="batch-drama-id" type="text" placeholder="例如 55647322；留空时使用输出文件夹名" /></label>' : ''}
     <label>视频介绍<textarea class="batch-intro" rows="3" placeholder="本组独立介绍，输出为 介绍.txt"></textarea></label>
     <label>输出文件夹路径<span class="path-picker"><input class="batch-output-dir" type="text" value="data/outputs" placeholder="选择本组输出目录" /><button class="secondary compact choose-batch-output" type="button">选择</button></span></label>
   </article>`;
@@ -359,11 +363,13 @@ function collectDramaGroups() {
     files: collectDramaFiles(),
     outputDir: document.getElementById('dramaOutputDir').value || 'data/outputs',
     introText: dramaForm.elements.namedItem('intro_text')?.value || '',
+    dramaId: document.getElementById('dramaId')?.value.trim() || '',
   }];
   document.querySelectorAll('#dramaGroupList .batch-group').forEach(group => groups.push({
     files: validVideoFiles([group.querySelector('.batch-folder-input')]),
     outputDir: group.querySelector('.batch-output-dir').value || 'data/outputs',
     introText: group.querySelector('.batch-intro').value || '',
+    dramaId: group.querySelector('.batch-drama-id')?.value.trim() || '',
   }));
   return groups.filter(group => group.files.length);
 }
@@ -401,6 +407,7 @@ async function submitDramaRootBatch() {
       source_root: sourceRoot,
       output_root: outputRoot,
       group_parallelism: document.getElementById('dramaGroupParallelism')?.value || '1',
+      publish_batch_size: document.getElementById('dramaPublishBatchSize')?.value || '5',
     };
     const res = await fetch('/api/drama-reels/root-batch', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -470,6 +477,108 @@ function boolField(formData, name) {
   formData.set(name, form.elements[name].checked ? 'true' : 'false');
 }
 
+function randomInRange(min, max, digits) {
+  return (min + Math.random() * (max - min)).toFixed(digits);
+}
+
+function friendlyRequestError(error) {
+  const message = String(error?.message || error || '未知错误');
+  if (message === 'Failed to fetch' || message.includes('NetworkError') || message.includes('Load failed')) {
+    return '后端服务未运行。请重新双击 run_mac.command，并保持启动终端窗口开启。';
+  }
+  return message;
+}
+
+function setAdvancedValue(name, value) {
+  const field = form.elements.namedItem(name);
+  if (field) field.value = String(value);
+}
+
+function randomizeAdvancedParameters() {
+  const crop = randomInRange(0.02, 0.05, 3);
+  const speed = randomInRange(1.015, 1.045, 3);
+  const head = randomInRange(0.2, 0.5, 1);
+  const tail = randomInRange(0.3, 0.6, 1);
+  const color = randomInRange(0.98, 1.03, 2);
+  const blur = randomInRange(14, 22, 1);
+  const styleModes = ['film', 'warm', 'cool', 'vignette'];
+  const styleMode = styleModes[Math.floor(Math.random() * styleModes.length)];
+  const styleOpacity = randomInRange(0.06, 0.12, 2);
+  const styleGrain = randomInRange(0.8, 1.4, 1);
+  const watermarkOpacity = randomInRange(0.18, 0.25, 2);
+  const watermarkWidth = randomInRange(0.10, 0.14, 2);
+  [['advanced_crop_min', crop], ['advanced_crop_max', crop],
+    ['advanced_speed_min', speed], ['advanced_speed_max', speed],
+    ['advanced_head_min', head], ['advanced_head_max', head],
+    ['advanced_tail_min', tail], ['advanced_tail_max', tail],
+    ['advanced_color_min', color], ['advanced_color_max', color],
+    ['advanced_blur_sigma_min', blur], ['advanced_blur_sigma_max', blur],
+    ['advanced_style_mode', styleMode],
+    ['advanced_style_opacity', styleOpacity],
+    ['advanced_style_grain', styleGrain],
+    ['advanced_watermark_opacity', watermarkOpacity],
+    ['advanced_watermark_width', watermarkWidth],
+  ].forEach(([name, value]) => setAdvancedValue(name, value));
+  setAdvancedValue('advanced_fps', Math.random() < 0.5 ? 30 : 60);
+  setAdvancedValue('advanced_resolution', '720p');
+  setAdvancedValue('advanced_eq_bands', Math.random() < 0.5 ? 3 : 5);
+  const interpolate = form.elements.namedItem('advanced_interpolate');
+  if (interpolate) interpolate.checked = false;
+  if (advancedSettingsStatus) {
+    advancedSettingsStatus.textContent = '已生成一组新参数；为加快导出，已关闭耗时较高的光流插帧。';
+  }
+}
+
+function advancedResourcePayload() {
+  const value = name => form.elements.namedItem(name)?.value.trim() || '';
+  return {
+    watermark_path: value('advanced_watermark_path'),
+    pip_path: value('advanced_pip_path'),
+    ambient_path: value('advanced_ambient_path'),
+    bgm_path: value('advanced_bgm_path'),
+    project_name: value('advanced_project_name') || 'VideoVariantStudio',
+    project_version: value('advanced_project_version') || '0.5.4',
+  };
+}
+
+async function loadAdvancedResources() {
+  try {
+    const res = await fetch('/api/advanced-settings');
+    if (!res.ok) throw new Error(await readError(res));
+    const data = await res.json();
+    const mapping = {
+      advanced_watermark_path: data.watermark_path,
+      advanced_pip_path: data.pip_path,
+      advanced_ambient_path: data.ambient_path,
+      advanced_bgm_path: data.bgm_path,
+      advanced_project_name: data.project_name,
+      advanced_project_version: data.project_version,
+    };
+    Object.entries(mapping).forEach(([name, value]) => setAdvancedValue(name, value || ''));
+    if (advancedSettingsStatus) advancedSettingsStatus.textContent = `固定素材配置：${data.config_path || '项目外用户目录'}`;
+  } catch (error) {
+    if (advancedSettingsStatus) advancedSettingsStatus.textContent = `固定素材读取失败：${friendlyRequestError(error)}`;
+  }
+}
+
+async function saveAdvancedResources(silent = false) {
+  const res = await fetch('/api/advanced-settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(advancedResourcePayload()),
+  });
+  if (!res.ok) throw new Error(await readError(res));
+  const data = await res.json();
+  if (!silent && advancedSettingsStatus) advancedSettingsStatus.textContent = `已保存：${data.config_path}`;
+  return data;
+}
+
+if (randomizeAdvancedButton) randomizeAdvancedButton.addEventListener('click', randomizeAdvancedParameters);
+if (saveAdvancedResourcesButton) {
+  saveAdvancedResourcesButton.addEventListener('click', async () => {
+    try { await saveAdvancedResources(false); }
+    catch (error) { if (advancedSettingsStatus) advancedSettingsStatus.textContent = `保存失败：${friendlyRequestError(error)}`; }
+  });
+}
+
 function createVariantFormData(fileChunk, allFiles, startIndex, batchId, group) {
   const data = new FormData();
   fileChunk.forEach(file => data.append('files', file));
@@ -484,6 +593,20 @@ function createVariantFormData(fileChunk, allFiles, startIndex, batchId, group) 
   data.set('hook_duration', document.getElementById('hookDuration').value || '3');
   data.set('hook_clip_seconds', document.getElementById('hookClipSeconds').value || '3');
   data.set('subtitle_model', document.getElementById('variantSubtitleModel').value || 'base');
+  [
+    'advanced_crop_min', 'advanced_crop_max', 'advanced_speed_min', 'advanced_speed_max',
+    'advanced_head_min', 'advanced_head_max', 'advanced_tail_min', 'advanced_tail_max',
+    'advanced_color_min', 'advanced_color_max', 'advanced_fps', 'advanced_resolution',
+    'advanced_blur_sigma_min', 'advanced_blur_sigma_max',
+    'advanced_eq_bands', 'advanced_watermark_path', 'advanced_watermark_opacity',
+    'advanced_watermark_width', 'advanced_style_mode', 'advanced_style_opacity',
+    'advanced_style_grain',
+    'advanced_pip_path', 'advanced_ambient_path', 'advanced_ambient_db',
+    'advanced_bgm_path', 'advanced_bgm_db', 'advanced_project_name', 'advanced_project_version',
+  ].forEach(name => {
+    const field = form.elements.namedItem(name);
+    if (field) data.set(name, field.value || '');
+  });
   data.set('batch_id', batchId);
   data.set('batch_total', String(allFiles.length));
   data.set('batch_start', String(startIndex + 1));
@@ -507,6 +630,12 @@ function createVariantFormData(fileChunk, allFiles, startIndex, batchId, group) 
     'effect_random_transition',
     'effect_remove_progress',
     'effect_english_subtitles',
+    'advanced_pipeline',
+    'advanced_interpolate',
+    'advanced_blur_bottom',
+    'advanced_border',
+    'advanced_reverb',
+    'advanced_pip_enabled',
   ].forEach(name => boolField(data, name));
   return data;
 }
@@ -522,6 +651,7 @@ form.addEventListener('submit', async (event) => {
   }
   setSubmitLocked(true, `正在上传 0/${totalFiles} 个文件...`);
   try {
+    if (form.elements.namedItem('advanced_pipeline')?.checked) await saveAdvancedResources(true);
     let uploaded = 0;
     await Promise.all(groups.map(async (group, groupIndex) => {
       const batchId = `web_${Date.now()}_${groupIndex}_${Math.random().toString(16).slice(2)}`;
@@ -541,7 +671,7 @@ form.addEventListener('submit', async (event) => {
     renderTasks();
     setSubmitLocked(false);
   } catch (error) {
-    alert('上传失败：' + (error.message || error));
+    alert('上传失败：' + friendlyRequestError(error));
     setSubmitLocked(false);
   }
 });
@@ -657,6 +787,7 @@ if (dramaForm) {
         group.files.forEach(file => data.append('files', file));
         data.set('output_dir', group.outputDir);
         data.set('intro_text', group.introText);
+        data.set('drama_id', group.dramaId || outputFolderName(group.outputDir, `drama_${groupIndex + 1}`));
         data.set('cloud_group_id', `drama_${Date.now()}_${groupIndex}_${Math.random().toString(16).slice(2)}`);
         data.set('cloud_folder_name', outputFolderName(group.outputDir, 'ShortDrama'));
         data.set('max_episodes', '50');
@@ -1030,6 +1161,7 @@ async function readError(res) {
 checkRuntime();
 checkVersion();
 loadBaiduStatus();
+loadAdvancedResources();
 loadExistingTasks();
 setInterval(pollTasks, 3000);
 document.addEventListener('visibilitychange', () => {
