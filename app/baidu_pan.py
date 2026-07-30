@@ -17,6 +17,7 @@ CHUNK_SIZE = 4 * 1024 * 1024
 OAUTH_AUTHORIZE_URL = "https://openapi.baidu.com/oauth/2.0/authorize"
 OAUTH_TOKEN_URL = "https://openapi.baidu.com/oauth/2.0/token"
 FILE_API_URL = "https://pan.baidu.com/rest/2.0/xpan/file"
+MULTIMEDIA_API_URL = "https://pan.baidu.com/rest/2.0/xpan/multimedia"
 UPLOAD_API_URL = "https://d.pcs.baidu.com/rest/2.0/pcs/superfile2"
 _REMOTE_GROUP_LOCK = threading.Lock()
 _REMOTE_GROUP_DIRS: dict[str, str] = {}
@@ -62,6 +63,16 @@ def public_status(config: dict[str, Any]) -> dict[str, Any]:
         "app_key": str(config.get("app_key") or ""),
         "redirect_uri": str(config.get("redirect_uri") or "oob"),
         "remote_dir": str(config.get("remote_dir") or ""),
+        "inbox_dir": str(config.get("inbox_dir") or ""),
+        "auto_watch": bool(config.get("auto_watch")),
+        "watch_interval": int(config.get("watch_interval") or 60),
+        "local_inbox": str(config.get("local_inbox") or ""),
+        "local_output": str(config.get("local_output") or ""),
+        "cleanup_after_upload": bool(config.get("cleanup_after_upload")),
+        "shutdown_when_idle": bool(config.get("shutdown_when_idle")),
+        "auto_task_config": dict(config.get("auto_task_config") or {}),
+        "notify_enabled": bool(config.get("notify_enabled")),
+        "pushplus_configured": bool(config.get("pushplus_token")),
         "expires_at": expires_at,
     }
 
@@ -160,6 +171,117 @@ def normalize_remote_dir(value: str) -> str:
 
 def _file_api(token: str, method: str, data: dict[str, Any]) -> dict[str, Any]:
     return _json_request(f"{FILE_API_URL}?method={method}&access_token={urllib.parse.quote(token)}", data, timeout=120)
+
+
+def _json_get(url: str, params: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
+    request = urllib.request.Request(f"{url}?{urllib.parse.urlencode(params)}")
+    request.add_header("User-Agent", "pan.baidu.com")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise BaiduPanError(f"百度网盘读取失败：{exc}") from exc
+    errno = payload.get("errno")
+    if errno not in (None, 0):
+        raise BaiduPanError(f"百度网盘返回错误 errno={errno}：{payload}")
+    return payload
+
+
+def list_directory(data_dir: Path, remote_dir: str) -> list[dict[str, Any]]:
+    """List one application directory. Pagination prevents silently missing large dramas."""
+    token = access_token(data_dir)
+    remote_dir = normalize_remote_dir(remote_dir)
+    result: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        payload = _json_get(FILE_API_URL, {
+            "method": "list", "access_token": token, "dir": remote_dir,
+            "order": "name", "start": start, "limit": 1000, "web": 1,
+        })
+        page = list(payload.get("list") or [])
+        result.extend(page)
+        if len(page) < 1000:
+            break
+        start += len(page)
+        if start >= 20_000:
+            raise BaiduPanError("单个目录项目过多（超过 20000），请拆分目录。")
+    return result
+
+
+def _download_url(data_dir: Path, fs_id: int | str) -> str:
+    token = access_token(data_dir)
+    payload = _json_get(MULTIMEDIA_API_URL, {
+        "method": "filemetas", "access_token": token,
+        "fsids": json.dumps([int(fs_id)]), "dlink": 1,
+    })
+    entries = payload.get("list") or []
+    if not entries or not entries[0].get("dlink"):
+        raise BaiduPanError(f"无法取得文件下载地址：fs_id={fs_id}")
+    separator = "&" if "?" in str(entries[0]["dlink"]) else "?"
+    return f"{entries[0]['dlink']}{separator}access_token={urllib.parse.quote(token)}"
+
+
+def download_directory(
+    data_dir: Path,
+    remote_dir: str,
+    local_dir: Path,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> list[Path]:
+    """Recursively download a Baidu application folder without escaping local_dir."""
+    remote_dir = normalize_remote_dir(remote_dir)
+    local_dir = local_dir.resolve()
+    local_dir.mkdir(parents=True, exist_ok=True)
+    files: list[dict[str, Any]] = []
+
+    def walk(directory: str, relative: Path) -> None:
+        for entry in list_directory(data_dir, directory):
+            name = Path(str(entry.get("server_filename") or "")).name
+            if not name or name in {".", ".."}:
+                continue
+            child_remote = str(entry.get("path") or f"{directory}/{name}")
+            if int(entry.get("isdir") or 0):
+                walk(child_remote, relative / name)
+            else:
+                files.append({**entry, "relative": relative / name})
+            if len(files) > 20_000:
+                raise BaiduPanError("下载目录文件过多（超过 20000），请拆分目录。")
+
+    walk(remote_dir, Path())
+    total = sum(int(item.get("size") or 0) for item in files)
+    completed = 0
+    downloaded: list[Path] = []
+    for item in files:
+        target = (local_dir / item["relative"]).resolve()
+        try:
+            target.relative_to(local_dir)
+        except ValueError as exc:
+            raise BaiduPanError(f"网盘文件名不安全：{item['relative']}") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        expected = int(item.get("size") or 0)
+        if target.is_file() and target.stat().st_size == expected:
+            completed += expected
+            downloaded.append(target)
+            if progress:
+                progress(completed, total, target.name)
+            continue
+        request = urllib.request.Request(_download_url(data_dir, item.get("fs_id")))
+        request.add_header("User-Agent", "pan.baidu.com")
+        temporary = target.with_suffix(target.suffix + ".part")
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response, temporary.open("wb") as handle:
+                while chunk := response.read(1024 * 1024):
+                    handle.write(chunk)
+                    if progress:
+                        progress(completed + handle.tell(), total, target.name)
+            if expected and temporary.stat().st_size != expected:
+                raise BaiduPanError(f"下载大小校验失败：{target.name}")
+            temporary.replace(target)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        completed += target.stat().st_size
+        downloaded.append(target)
+    return downloaded
 
 
 def ensure_remote_dir(token: str, remote_dir: str) -> None:

@@ -41,6 +41,9 @@ const baiduCloudForm = document.getElementById('baiduCloudForm');
 const baiduAuthorizeButton = document.getElementById('baiduAuthorizeButton');
 const baiduSubmitCodeButton = document.getElementById('baiduSubmitCodeButton');
 const baiduDisconnectButton = document.getElementById('baiduDisconnectButton');
+const baiduScanNowButton = document.getElementById('baiduScanNowButton');
+const baiduSaveAutoTaskButton = document.getElementById('baiduSaveAutoTaskButton');
+const pushplusTestButton = document.getElementById('pushplusTestButton');
 
 
 function syncDramaWorkflow() {
@@ -84,8 +87,162 @@ function showBaiduStatus(data) {
   const configured = data.configured ? '配置已保存' : '尚未配置';
   const authorized = data.authorized ? '已授权' : '未授权';
   const enabled = data.enabled ? '自动上传已开启' : '自动上传未开启';
-  target.textContent = `${configured} · ${authorized} · ${enabled}`;
+  const watcher = data.watcher?.message || (data.auto_watch ? '自动扫描已开启' : '自动扫描未开启');
+  target.textContent = `${configured} · ${authorized} · ${enabled} · ${watcher}`;
   target.classList.toggle('error', Boolean(data.configured && !data.authorized));
+}
+
+function showBaiduAutoTaskConfig(config = {}) {
+  const target = document.getElementById('baiduAutoTaskStatus');
+  if (!target) return;
+  const intensityNames = { light: '轻度', balanced: '均衡', strong: '强力' };
+  const intensity = intensityNames[config.intensity] || '均衡';
+  const minSeconds = config.min_seconds || 28;
+  const maxSeconds = config.max_seconds || 30;
+  const versions = config.versions_per_episode || 1;
+  const workers = config.worker_count || 3;
+  target.textContent = `当前自动配置：${intensity} · ${minSeconds}–${maxSeconds} 秒 · 每段 ${versions} 个版本 · ${workers} 线程`;
+}
+
+function applyUnifiedProfile(config = {}) {
+  const value = (id, fallback) => {
+    const element = document.getElementById(id);
+    if (element) element.value = config[fallback[0]] ?? fallback[1];
+  };
+  value('profileIntensity', ['intensity', 'balanced']);
+  value('profileVersions', ['versions_per_episode', 1]);
+  value('profileWorkers', ['worker_count', 3]);
+  value('profileMinSeconds', ['min_seconds', 28]);
+  value('profileMaxSeconds', ['max_seconds', 30]);
+  value('profileSubtitleModel', ['subtitle_model', 'base']);
+  value('profileAdvancedResolution', ['advanced_resolution', '720p']);
+  value('profileAdvancedFps', ['advanced_fps', 0]);
+  value('profileAdvancedCropMin', ['advanced_crop_min', 0.02]);
+  value('profileAdvancedCropMax', ['advanced_crop_max', 0.05]);
+  value('profileAdvancedSpeedMin', ['advanced_speed_min', 1.015]);
+  value('profileAdvancedSpeedMax', ['advanced_speed_max', 1.045]);
+  value('profileAdvancedColorMin', ['advanced_color_min', 0.98]);
+  value('profileAdvancedColorMax', ['advanced_color_max', 1.03]);
+  value('profileAdvancedHeadMin', ['advanced_head_min', 0.2]);
+  value('profileAdvancedHeadMax', ['advanced_head_max', 0.5]);
+  value('profileAdvancedTailMin', ['advanced_tail_min', 0.3]);
+  value('profileAdvancedTailMax', ['advanced_tail_max', 0.6]);
+  value('profileAdvancedBlurMin', ['advanced_blur_sigma_min', 14]);
+  value('profileAdvancedBlurMax', ['advanced_blur_sigma_max', 22]);
+  [
+    ['profileAdvancedPipeline', 'advanced_pipeline'],
+    ['profileAdvancedInterpolate', 'advanced_interpolate'],
+    ['profileAdvancedBlurBottom', 'advanced_blur_bottom'],
+    ['profileAdvancedBorder', 'advanced_border'],
+    ['profileAdvancedReverb', 'advanced_reverb'],
+    ['profileAdvancedPip', 'advanced_pip_enabled'],
+  ].forEach(([id, name]) => {
+    const field = document.getElementById(id);
+    if (field) field.checked = Boolean(config[name]);
+  });
+  document.querySelectorAll('#profileEffects [data-effect]').forEach(input => {
+    const name = input.dataset.effect;
+    input.checked = config[name] ?? !['effect_frame_interpolate', 'effect_hook_clip', 'effect_hook_caption', 'effect_english_subtitles'].includes(name);
+  });
+  const applyToForm = (targetForm, versionsName) => {
+    if (!targetForm) return;
+    const mappings = {
+      intensity: config.intensity ?? 'balanced',
+      worker_count: config.worker_count ?? 3,
+      [versionsName]: config.versions_per_episode ?? 1,
+      min_seconds: config.min_seconds ?? 28,
+      max_seconds: config.max_seconds ?? 30,
+      subtitle_model: config.subtitle_model ?? 'base',
+      advanced_crop_min: config.advanced_crop_min ?? 0.02,
+      advanced_crop_max: config.advanced_crop_max ?? 0.05,
+      advanced_speed_min: config.advanced_speed_min ?? 1.015,
+      advanced_speed_max: config.advanced_speed_max ?? 1.045,
+      advanced_color_min: config.advanced_color_min ?? 0.98,
+      advanced_color_max: config.advanced_color_max ?? 1.03,
+      advanced_head_min: config.advanced_head_min ?? 0.2,
+      advanced_head_max: config.advanced_head_max ?? 0.5,
+      advanced_tail_min: config.advanced_tail_min ?? 0.3,
+      advanced_tail_max: config.advanced_tail_max ?? 0.6,
+      advanced_blur_sigma_min: config.advanced_blur_sigma_min ?? 14,
+      advanced_blur_sigma_max: config.advanced_blur_sigma_max ?? 22,
+      advanced_fps: config.advanced_fps ?? 0,
+      advanced_resolution: config.advanced_resolution ?? '720p',
+    };
+    Object.entries(mappings).forEach(([name, setting]) => {
+      const field = targetForm.elements.namedItem(name);
+      if (field) field.value = setting;
+    });
+    [
+      'advanced_eq_bands', 'advanced_watermark_path', 'advanced_watermark_opacity',
+      'advanced_watermark_width', 'advanced_style_mode', 'advanced_style_opacity',
+      'advanced_style_grain', 'advanced_pip_path', 'advanced_ambient_path',
+      'advanced_ambient_db', 'advanced_bgm_path', 'advanced_bgm_db',
+      'advanced_project_name', 'advanced_project_version',
+    ].forEach(name => {
+      const field = targetForm.elements.namedItem(name);
+      if (field && config[name] !== undefined) field.value = config[name];
+    });
+    document.querySelectorAll('#profileEffects [data-effect]').forEach(profileInput => {
+      const field = targetForm.elements.namedItem(profileInput.dataset.effect);
+      if (field && !field.disabled) field.checked = profileInput.checked;
+    });
+    [
+      'advanced_pipeline', 'advanced_interpolate', 'advanced_blur_bottom',
+      'advanced_border', 'advanced_reverb', 'advanced_pip_enabled',
+    ].forEach(name => {
+      const field = targetForm.elements.namedItem(name);
+      if (field) field.checked = Boolean(config[name]);
+    });
+  };
+  applyToForm(form, 'output_count');
+  applyToForm(dramaForm, 'versions_per_episode');
+}
+
+function collectUnifiedProfile() {
+  const payload = {
+    intensity: document.getElementById('profileIntensity')?.value || 'balanced',
+    versions_per_episode: document.getElementById('profileVersions')?.value || '1',
+    worker_count: document.getElementById('profileWorkers')?.value || '3',
+    min_seconds: document.getElementById('profileMinSeconds')?.value || '28',
+    max_seconds: document.getElementById('profileMaxSeconds')?.value || '30',
+    group_parallelism: document.getElementById('dramaGroupParallelism')?.value || '1',
+    publish_batch_size: document.getElementById('dramaPublishBatchSize')?.value || '5',
+    subtitle_model: document.getElementById('profileSubtitleModel')?.value || 'base',
+    advanced_pipeline: Boolean(document.getElementById('profileAdvancedPipeline')?.checked),
+    advanced_resolution: document.getElementById('profileAdvancedResolution')?.value || '720p',
+    advanced_fps: document.getElementById('profileAdvancedFps')?.value || '0',
+    advanced_crop_min: document.getElementById('profileAdvancedCropMin')?.value || '0.02',
+    advanced_crop_max: document.getElementById('profileAdvancedCropMax')?.value || '0.05',
+    advanced_speed_min: document.getElementById('profileAdvancedSpeedMin')?.value || '1.015',
+    advanced_speed_max: document.getElementById('profileAdvancedSpeedMax')?.value || '1.045',
+    advanced_color_min: document.getElementById('profileAdvancedColorMin')?.value || '0.98',
+    advanced_color_max: document.getElementById('profileAdvancedColorMax')?.value || '1.03',
+    advanced_head_min: document.getElementById('profileAdvancedHeadMin')?.value || '0.2',
+    advanced_head_max: document.getElementById('profileAdvancedHeadMax')?.value || '0.5',
+    advanced_tail_min: document.getElementById('profileAdvancedTailMin')?.value || '0.3',
+    advanced_tail_max: document.getElementById('profileAdvancedTailMax')?.value || '0.6',
+    advanced_blur_sigma_min: document.getElementById('profileAdvancedBlurMin')?.value || '14',
+    advanced_blur_sigma_max: document.getElementById('profileAdvancedBlurMax')?.value || '22',
+    advanced_interpolate: Boolean(document.getElementById('profileAdvancedInterpolate')?.checked),
+    advanced_blur_bottom: Boolean(document.getElementById('profileAdvancedBlurBottom')?.checked),
+    advanced_border: Boolean(document.getElementById('profileAdvancedBorder')?.checked),
+    advanced_reverb: Boolean(document.getElementById('profileAdvancedReverb')?.checked),
+    advanced_pip_enabled: Boolean(document.getElementById('profileAdvancedPip')?.checked),
+  };
+  document.querySelectorAll('#profileEffects [data-effect]').forEach(input => {
+    payload[input.dataset.effect] = input.checked;
+  });
+  [
+    'advanced_eq_bands', 'advanced_watermark_path', 'advanced_watermark_opacity',
+    'advanced_watermark_width', 'advanced_style_mode', 'advanced_style_opacity',
+    'advanced_style_grain', 'advanced_pip_path', 'advanced_ambient_path',
+    'advanced_ambient_db', 'advanced_bgm_path', 'advanced_bgm_db',
+    'advanced_project_name', 'advanced_project_version',
+  ].forEach(name => {
+    const field = form?.elements.namedItem(name);
+    if (field) payload[name] = field.value;
+  });
+  return payload;
 }
 
 async function loadBaiduStatus() {
@@ -98,6 +255,18 @@ async function loadBaiduStatus() {
     document.getElementById('baiduRemoteDir').value = data.remote_dir || '';
     document.getElementById('baiduRedirectUri').value = data.redirect_uri || 'oob';
     document.getElementById('baiduAutoUpload').checked = Boolean(data.enabled);
+    document.getElementById('baiduInboxDir').value = data.inbox_dir || '';
+    document.getElementById('baiduWatchInterval').value = data.watch_interval || 60;
+    document.getElementById('baiduLocalInbox').value = data.local_inbox || '';
+    document.getElementById('baiduLocalOutput').value = data.local_output || '';
+    document.getElementById('baiduAutoWatch').checked = Boolean(data.auto_watch);
+    document.getElementById('baiduCleanupAfterUpload').checked = Boolean(data.cleanup_after_upload);
+    document.getElementById('baiduShutdownWhenIdle').checked = Boolean(data.shutdown_when_idle);
+    document.getElementById('pushplusNotifyEnabled').checked = Boolean(data.notify_enabled);
+    document.getElementById('pushplusStatus').textContent = data.pushplus_configured
+      ? 'PushPlus Token 已保存。' : '尚未配置 PushPlus。';
+    showBaiduAutoTaskConfig(data.auto_task_config || {});
+    applyUnifiedProfile(data.auto_task_config || {});
     showBaiduStatus(data);
   } catch (error) {
     document.getElementById('baiduCloudStatus').textContent = `读取失败：${error.message || error}`;
@@ -111,6 +280,15 @@ async function saveBaiduSettings() {
     remote_dir: document.getElementById('baiduRemoteDir').value.trim(),
     redirect_uri: document.getElementById('baiduRedirectUri').value.trim() || 'oob',
     enabled: document.getElementById('baiduAutoUpload').checked,
+    inbox_dir: document.getElementById('baiduInboxDir').value.trim(),
+    watch_interval: Number(document.getElementById('baiduWatchInterval').value || 60),
+    local_inbox: document.getElementById('baiduLocalInbox').value.trim(),
+    local_output: document.getElementById('baiduLocalOutput').value.trim(),
+    auto_watch: document.getElementById('baiduAutoWatch').checked,
+    cleanup_after_upload: document.getElementById('baiduCleanupAfterUpload').checked,
+    shutdown_when_idle: document.getElementById('baiduShutdownWhenIdle').checked,
+    notify_enabled: document.getElementById('pushplusNotifyEnabled').checked,
+    pushplus_token: document.getElementById('pushplusToken').value.trim(),
   };
   const res = await fetch('/api/cloud/baidu/settings', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -118,6 +296,7 @@ async function saveBaiduSettings() {
   if (!res.ok) throw new Error(await readError(res));
   const data = await res.json();
   document.getElementById('baiduSecretKey').value = '';
+  document.getElementById('pushplusToken').value = '';
   showBaiduStatus(data);
   return data;
 }
@@ -170,6 +349,64 @@ if (baiduDisconnectButton) {
     if (!confirm('确定解除本机保存的百度网盘授权？')) return;
     const res = await fetch('/api/cloud/baidu/disconnect', { method: 'POST' });
     showBaiduStatus(await res.json());
+  });
+}
+
+if (baiduScanNowButton) {
+  baiduScanNowButton.addEventListener('click', async () => {
+    baiduScanNowButton.disabled = true;
+    try {
+      await saveBaiduSettings();
+      const res = await fetch('/api/cloud/baidu/scan-now', { method: 'POST' });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = await res.json();
+      showBaiduStatus({ ...(await (await fetch('/api/cloud/baidu/status')).json()), watcher: data.watcher });
+    } catch (error) {
+      alert('扫描失败：' + (error.message || error));
+    } finally {
+      baiduScanNowButton.disabled = false;
+    }
+  });
+}
+
+if (baiduSaveAutoTaskButton) {
+  baiduSaveAutoTaskButton.addEventListener('click', async () => {
+    const payload = collectUnifiedProfile();
+    baiduSaveAutoTaskButton.disabled = true;
+    try {
+      const res = await fetch('/api/cloud/baidu/auto-task-settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      const data = await res.json();
+      showBaiduAutoTaskConfig(data.auto_task_config || {});
+      applyUnifiedProfile(data.auto_task_config || {});
+      alert('统一处理配置已保存，并应用到处理视频、Short Drama 和网盘自动任务。');
+    } catch (error) {
+      alert('自动任务配置保存失败：' + (error.message || error));
+    } finally {
+      baiduSaveAutoTaskButton.disabled = false;
+    }
+  });
+}
+
+if (pushplusTestButton) {
+  pushplusTestButton.addEventListener('click', async () => {
+    pushplusTestButton.disabled = true;
+    try {
+      const token = document.getElementById('pushplusToken').value.trim();
+      const res = await fetch('/api/notifications/pushplus/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pushplus_token: token }),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      document.getElementById('pushplusStatus').textContent = '测试通知已发送，请查看微信。';
+      document.getElementById('pushplusToken').value = '';
+    } catch (error) {
+      document.getElementById('pushplusStatus').textContent = `测试失败：${error.message || error}`;
+    } finally {
+      pushplusTestButton.disabled = false;
+    }
   });
 }
 

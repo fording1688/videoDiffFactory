@@ -27,8 +27,10 @@ from .advanced_settings import load_advanced_settings, save_advanced_settings
 from .baidu_pan import (
     BaiduPanError,
     authorization_url as baidu_authorization_url,
+    download_directory as download_baidu_directory,
     exchange_code as baidu_exchange_code,
     load_config as load_baidu_config,
+    list_directory as list_baidu_directory,
     normalize_remote_dir,
     public_status as baidu_public_status,
     reserve_remote_subdir as reserve_baidu_remote_subdir,
@@ -41,6 +43,7 @@ from .english_subtitles import slice_segments, translate_chinese_speech
 from .drama_factory import options_from_tool_options, render_drama_factory
 from .drama_reel_analyzer import DramaReelOptions, analyze_drama_reels, generate_reels_from_plan, render_single_reel
 from .models import BatchUploadResponse, DownloadUrlRequest, TaskState, UploadResponse, VariantOptions, VariantTask
+from .notifications import NotificationError, send_pushplus
 from .video_utils import app_root, asset_root, check_runtime, get_video_info, safe_stem, user_data_root
 from .video_augmentor import VideoAugmentor
 from .visual_variant import merge_videos, render_variant, selected_video_encoder, split_video_by_random_range
@@ -99,8 +102,13 @@ def _worker_cap() -> int:
 MAX_WORKER_CAP = _worker_cap()
 EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKER_CAP, thread_name_prefix="variant-worker")
 CLOUD_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="baidu-upload")
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.9.0"
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".webm"}
+BAIDU_WATCH_STOP = threading.Event()
+BAIDU_SCAN_LOCK = threading.Lock()
+BAIDU_WATCH_STATE: dict[str, Any] = {"running": False, "message": "未启动", "seen": {}, "current": ""}
+AUTO_SHUTDOWN_LOCK = threading.Lock()
+AUTO_SHUTDOWN_SCHEDULED = False
 
 app = FastAPI(
     title="Video Variant Studio",
@@ -131,6 +139,7 @@ def _shutdown_background_workers() -> None:
         request_cancel(task_id)
     for future in futures:
         future.cancel()
+    BAIDU_WATCH_STOP.set()
     EXECUTOR.shutdown(wait=False, cancel_futures=True)
     CLOUD_EXECUTOR.shutdown(wait=False, cancel_futures=True)
 
@@ -428,6 +437,26 @@ def _drama_options_from_payload(payload: dict[str, Any]) -> VariantOptions:
     )
 
 
+ADVANCED_PROFILE_KEYS = (
+    "advanced_pipeline", "advanced_crop_min", "advanced_crop_max",
+    "advanced_speed_min", "advanced_speed_max", "advanced_head_min",
+    "advanced_head_max", "advanced_tail_min", "advanced_tail_max",
+    "advanced_color_min", "advanced_color_max", "advanced_fps",
+    "advanced_resolution", "advanced_interpolate", "advanced_blur_bottom",
+    "advanced_blur_sigma_min", "advanced_blur_sigma_max", "advanced_border",
+    "advanced_eq_bands", "advanced_reverb", "advanced_watermark_path",
+    "advanced_watermark_opacity", "advanced_watermark_width",
+    "advanced_style_mode", "advanced_style_opacity", "advanced_style_grain",
+    "advanced_pip_path", "advanced_pip_enabled", "advanced_ambient_path",
+    "advanced_ambient_db", "advanced_bgm_path", "advanced_bgm_db",
+    "advanced_project_name", "advanced_project_version",
+)
+
+
+def _advanced_profile_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: payload[key] for key in ADVANCED_PROFILE_KEYS if key in payload}
+
+
 def _variant_output_stem(task: VariantTask, version_index: int) -> str:
     batch_total = max(1, int(task.tool_options.get("batch_total") or 1))
     batch_position = max(1, int(task.tool_options.get("batch_position") or 1))
@@ -482,6 +511,56 @@ def _baidu_upload_paths(task: VariantTask) -> list[Path]:
     return paths
 
 
+def _schedule_autodl_shutdown() -> None:
+    """Shut down only on an AutoDL-like Linux host and only after a grace period."""
+    global AUTO_SHUTDOWN_SCHEDULED
+    config = load_baidu_config(DATA_DIR)
+    if not config.get("shutdown_when_idle") or platform.system() != "Linux" or not Path("/root/autodl-tmp").exists():
+        return
+    with AUTO_SHUTDOWN_LOCK:
+        if AUTO_SHUTDOWN_SCHEDULED:
+            return
+        AUTO_SHUTDOWN_SCHEDULED = True
+
+    def shutdown_if_idle() -> None:
+        global AUTO_SHUTDOWN_SCHEDULED
+        with TASK_LOCK:
+            active = any(task.status in {TaskState.queued, TaskState.processing} for task in TASKS.values())
+        if active:
+            threading.Timer(60, shutdown_if_idle).start()
+            return
+        BAIDU_WATCH_STATE["message"] = "任务已全部完成，正在关闭 AutoDL 实例"
+        try:
+            subprocess.run(["shutdown", "-h", "now"], check=False)
+        finally:
+            with AUTO_SHUTDOWN_LOCK:
+                AUTO_SHUTDOWN_SCHEDULED = False
+
+    threading.Timer(90, shutdown_if_idle).start()
+
+
+def _notify_baidu_result(task: VariantTask, success: bool, remote_dir: str, file_count: int, error: str = "") -> None:
+    config = load_baidu_config(DATA_DIR)
+    if not config.get("notify_enabled") or not config.get("pushplus_token"):
+        return
+    drama_name = str(task.tool_options.get("source_group_name") or task.original_filename or task.task_id)
+    elapsed = max(0, int(task.elapsed_seconds or 0))
+    minutes, seconds = divmod(elapsed, 60)
+    status_text = "上传完成" if success else "上传失败"
+    icon = "✅" if success else "❌"
+    content = "\n".join(
+        [
+            f"## {icon} 百度网盘{status_text}",
+            f"- 剧名：{drama_name}",
+            f"- 成品数量：{file_count}",
+            f"- 总耗时：{minutes} 分 {seconds} 秒",
+            f"- 网盘目录：`{remote_dir}`",
+            *( [f"- 错误：{error}"] if error else [] ),
+        ]
+    )
+    send_pushplus(str(config.get("pushplus_token") or ""), f"{icon} {drama_name}：{status_text}", content)
+
+
 def _finish_task(task: VariantTask, message: str) -> None:
     config = load_baidu_config(DATA_DIR)
     supported = task.operation in {
@@ -528,17 +607,56 @@ def _finish_task(task: VariantTask, message: str) -> None:
                     percent = int((completed_bytes + current) / total_bytes * 100)
                     _set(task, progress=min(99, 96 + int(percent * 0.03)), message=f"正在上传百度网盘：{index}/{len(paths)} · {percent}%")
 
-                upload_baidu_file(DATA_DIR, path, upload_remote_dir, update)
+                last_error: Exception | None = None
+                for attempt in range(1, 6):
+                    try:
+                        upload_baidu_file(DATA_DIR, path, upload_remote_dir, update)
+                        last_error = None
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt >= 5:
+                            break
+                        delay = min(30, 2 ** attempt)
+                        _set(
+                            task,
+                            message=f"百度网盘暂时失败，{delay} 秒后重试：{index}/{len(paths)}（第 {attempt}/5 次）",
+                        )
+                        time.sleep(delay)
+                if last_error is not None:
+                    raise last_error
                 completed_bytes += file_size
                 state["uploaded_count"] = index
                 state["uploaded_bytes"] = completed_bytes
             state["status"] = "completed"
+            if config.get("cleanup_after_upload"):
+                removed = 0
+                for path in paths:
+                    try:
+                        path.unlink(missing_ok=True)
+                        removed += 1
+                    except OSError:
+                        pass
+                state["local_files_removed"] = removed
             _set(task, status=TaskState.completed, progress=100, message=f"{message}；百度网盘上传完成 {len(paths)}/{len(paths)}")
+            try:
+                _notify_baidu_result(task, True, str(state.get("remote_dir") or remote_dir), len(paths))
+                state["notification"] = "sent"
+            except Exception as exc:
+                state["notification"] = "failed"
+                state["notification_error"] = str(exc)
+            _schedule_autodl_shutdown()
         except Exception as exc:
             state["status"] = "failed"
             state["error"] = str(exc)
             # Cloud failure never invalidates locally rendered videos.
             _set(task, status=TaskState.completed, progress=100, message=f"{message}；百度网盘上传失败，本地文件已保留")
+            try:
+                _notify_baidu_result(task, False, str(state.get("remote_dir") or remote_dir), len(paths), str(exc))
+                state["notification"] = "sent"
+            except Exception as notify_exc:
+                state["notification"] = "failed"
+                state["notification_error"] = str(notify_exc)
 
     CLOUD_EXECUTOR.submit(worker)
 
@@ -670,7 +788,11 @@ def _render_task(task: VariantTask) -> None:
         _set(task, status=TaskState.failed, progress=100, message="处理失败")
 
 
-def _advanced_augmentor_parameters(task: VariantTask, variant_task_id: str) -> dict[str, Any]:
+def _advanced_augmentor_parameters(
+    task: VariantTask,
+    variant_task_id: str,
+    input_video: str | Path | None = None,
+) -> dict[str, Any]:
     """把网页配置转换为单次 FFmpeg 高级流水线参数。"""
     options = task.tool_options
     rng = random.Random(variant_task_id)
@@ -684,7 +806,7 @@ def _advanced_augmentor_parameters(task: VariantTask, variant_task_id: str) -> d
     tail_max = max(tail_min, float(options.get("advanced_tail_max") or 0.6))
     head_trim = rng.uniform(head_min, head_max)
     tail_trim = rng.uniform(tail_min, tail_max)
-    source_duration = get_video_info(task.input_path).duration
+    source_duration = get_video_info(input_video or task.input_path).duration
     if source_duration <= head_trim + tail_trim + 0.2:
         head_trim = tail_trim = 0.0
     saturation_min = max(0.5, min(float(options.get("advanced_color_min") or 0.98), 2.0))
@@ -1320,19 +1442,29 @@ def _render_drama_batch_reels(
                 raise CancelledTask("任务已取消。")
             variant_id = f"{task.task_id}_p{part_index:04d}_v{version_index:02d}"
             output_sequence = first_output_sequence + output_number - 1
-            output_path, effects, _ = render_variant(
-                input_video=base_path,
-                output_dir=final_dir,
-                task_id=variant_id,
-                options=variant_options,
-                output_stem=f"{drama_id}_{output_sequence:03d}",
-                english_subtitles=slice_segments(
-                    english_subtitles,
-                    float(part.get("start") or 0),
-                    float(part.get("duration") or 0),
-                ),
-                cancel_task_id=task.task_id,
-            )
+            if bool(task.tool_options.get("advanced_pipeline")):
+                output_path = final_dir / f"{drama_id}_{output_sequence:03d}.mp4"
+                parameters = _advanced_augmentor_parameters(task, variant_id, base_path)
+                plan = VideoAugmentor(parameters).process(
+                    base_path,
+                    output_path,
+                    task_id=task.task_id,
+                )
+                effects = {"pipeline": "advanced", "plan": plan.as_dict(), "parameters": parameters}
+            else:
+                output_path, effects, _ = render_variant(
+                    input_video=base_path,
+                    output_dir=final_dir,
+                    task_id=variant_id,
+                    options=variant_options,
+                    output_stem=f"{drama_id}_{output_sequence:03d}",
+                    english_subtitles=slice_segments(
+                        english_subtitles,
+                        float(part.get("start") or 0),
+                        float(part.get("duration") or 0),
+                    ),
+                    cancel_task_id=task.task_id,
+                )
             return {
                 "output_number": output_number,
                 "output_sequence": output_sequence,
@@ -1680,7 +1812,7 @@ def update_advanced_settings(payload: dict[str, Any] = Body(...)) -> dict[str, A
 
 @app.get("/api/cloud/baidu/status")
 def baidu_cloud_status() -> dict[str, Any]:
-    return {"ok": True, **baidu_public_status(load_baidu_config(DATA_DIR))}
+    return {"ok": True, **baidu_public_status(load_baidu_config(DATA_DIR)), "watcher": dict(BAIDU_WATCH_STATE)}
 
 
 @app.post("/api/cloud/baidu/settings")
@@ -1689,27 +1821,193 @@ def baidu_cloud_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     app_key = str(payload.get("app_key") or current.get("app_key") or "").strip()
     secret_key = str(payload.get("secret_key") or current.get("secret_key") or "").strip()
     remote_value = str(payload.get("remote_dir") or current.get("remote_dir") or "").strip()
+    inbox_value = str(payload.get("inbox_dir") or current.get("inbox_dir") or "").strip()
     try:
         remote_dir = normalize_remote_dir(remote_value) if remote_value else ""
+        inbox_dir = normalize_remote_dir(inbox_value) if inbox_value else ""
     except BaiduPanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     redirect_uri = str(payload.get("redirect_uri") or current.get("redirect_uri") or "oob").strip()
     enabled = bool(payload.get("enabled"))
+    auto_watch = bool(payload.get("auto_watch"))
+    pushplus_token = str(payload.get("pushplus_token") or current.get("pushplus_token") or "").strip()
     if not app_key or not secret_key:
         raise HTTPException(status_code=400, detail="请填写百度开放平台 App Key 和 Secret Key。")
     if enabled and not remote_dir:
         raise HTTPException(status_code=400, detail="开启自动上传前，请填写目标目录，例如 /apps/你的应用名称/VideoVariantStudio。")
+    if auto_watch and not inbox_dir:
+        raise HTTPException(status_code=400, detail="开启自动扫描前，请填写网盘素材目录。")
+    local_inbox = str(payload.get("local_inbox") or current.get("local_inbox") or (DATA_DIR / "baidu-inbox")).strip()
+    local_output = str(payload.get("local_output") or current.get("local_output") or (DATA_DIR / "baidu-output")).strip()
     config = save_baidu_config(
         DATA_DIR,
         {
             "app_key": app_key,
             "secret_key": secret_key,
             "remote_dir": remote_dir,
+            "inbox_dir": inbox_dir,
+            "local_inbox": local_inbox,
+            "local_output": local_output,
+            "auto_watch": auto_watch,
+            "watch_interval": max(30, min(int(payload.get("watch_interval") or current.get("watch_interval") or 60), 3600)),
+            "cleanup_after_upload": bool(payload.get("cleanup_after_upload")),
+            "shutdown_when_idle": bool(payload.get("shutdown_when_idle")),
+            "notify_enabled": bool(payload.get("notify_enabled")),
+            "pushplus_token": pushplus_token,
             "redirect_uri": redirect_uri,
             "enabled": enabled,
         },
     )
     return {"ok": True, **baidu_public_status(config)}
+
+
+@app.post("/api/notifications/pushplus/test")
+def test_pushplus_notification(payload: dict[str, Any] = Body(default_factory=dict)) -> dict[str, Any]:
+    config = load_baidu_config(DATA_DIR)
+    token = str(payload.get("pushplus_token") or config.get("pushplus_token") or "").strip()
+    try:
+        send_pushplus(
+            token,
+            "✅ Video Variant Studio 微信通知测试",
+            "## 通知配置成功\n- 百度网盘上传完成或失败时，你会收到微信消息。",
+        )
+    except NotificationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.get("pushplus_token"):
+        save_baidu_config(DATA_DIR, {"pushplus_token": token})
+    return {"ok": True}
+
+
+def _baidu_processed_path() -> Path:
+    return DATA_DIR / "baidu_processed.json"
+
+
+def _load_baidu_processed() -> dict[str, Any]:
+    try:
+        return json.loads(_baidu_processed_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_baidu_processed(value: dict[str, Any]) -> None:
+    path = _baidu_processed_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _run_baidu_inbox_once_unlocked() -> None:
+    config = load_baidu_config(DATA_DIR)
+    if not config.get("auto_watch") or not baidu_public_status(config).get("authorized"):
+        BAIDU_WATCH_STATE.update(running=False, message="自动扫描未开启或尚未授权")
+        return
+    inbox_dir = normalize_remote_dir(str(config.get("inbox_dir") or ""))
+    entries = [item for item in list_baidu_directory(DATA_DIR, inbox_dir) if int(item.get("isdir") or 0)]
+    processed = _load_baidu_processed()
+    seen = BAIDU_WATCH_STATE.setdefault("seen", {})
+    for entry in entries:
+        remote_path = str(entry.get("path") or "")
+        signature = f"{entry.get('fs_id')}:{entry.get('server_mtime')}"
+        if processed.get(remote_path) == signature:
+            continue
+        # A folder must look unchanged in two scans. This avoids downloading while
+        # the user is still uploading episodes into it.
+        if seen.get(remote_path) != signature:
+            seen[remote_path] = signature
+            BAIDU_WATCH_STATE.update(current="", message=f"已发现 {entry.get('server_filename') or '新文件夹'}，等待下一次稳定扫描")
+            continue
+        folder_name = safe_stem(str(entry.get("server_filename") or "drama"))
+        run_id = uuid.uuid4().hex[:10]
+        source_root = Path(str(config.get("local_inbox") or DATA_DIR / "baidu-inbox")) / run_id
+        local_group = source_root / folder_name
+        output_root = Path(str(config.get("local_output") or DATA_DIR / "baidu-output")) / run_id
+        BAIDU_WATCH_STATE.update(current=folder_name, message=f"正在从百度网盘下载：{folder_name}")
+
+        def progress(current: int, total: int, filename: str) -> None:
+            percent = int(current / max(1, total) * 100)
+            BAIDU_WATCH_STATE["message"] = f"正在下载 {folder_name}：{percent}% · {filename}"
+
+        download_baidu_directory(DATA_DIR, remote_path, local_group, progress)
+        auto_task_config = dict(config.get("auto_task_config") or {})
+        create_drama_reel_root_batch({
+            **auto_task_config,
+            "source_root": str(source_root),
+            "output_root": str(output_root),
+        })
+        processed[remote_path] = signature
+        _save_baidu_processed(processed)
+        BAIDU_WATCH_STATE.update(current="", message=f"已创建自动任务：{folder_name}")
+
+
+def _run_baidu_inbox_once() -> None:
+    # The timer and the manual Scan Now button can fire together. Serialize the
+    # whole download/submission transaction so the same remote folder is never
+    # submitted twice.
+    with BAIDU_SCAN_LOCK:
+        _run_baidu_inbox_once_unlocked()
+
+
+def _baidu_watch_loop() -> None:
+    BAIDU_WATCH_STATE.update(running=True, message="百度网盘自动扫描已启动")
+    while not BAIDU_WATCH_STOP.is_set():
+        try:
+            _run_baidu_inbox_once()
+        except Exception as exc:
+            BAIDU_WATCH_STATE.update(message=f"自动扫描失败：{exc}", current="")
+        config = load_baidu_config(DATA_DIR)
+        BAIDU_WATCH_STOP.wait(max(30, min(int(config.get("watch_interval") or 60), 3600)))
+    BAIDU_WATCH_STATE["running"] = False
+
+
+@app.on_event("startup")
+def _start_baidu_watcher() -> None:
+    BAIDU_WATCH_STOP.clear()
+    threading.Thread(target=_baidu_watch_loop, name="baidu-inbox-watcher", daemon=True).start()
+
+
+@app.post("/api/cloud/baidu/scan-now")
+def baidu_scan_now() -> dict[str, Any]:
+    try:
+        _run_baidu_inbox_once()
+    except BaiduPanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "watcher": dict(BAIDU_WATCH_STATE)}
+
+
+@app.post("/api/cloud/baidu/auto-task-settings")
+def baidu_auto_task_settings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    allowed = {
+        "versions_per_episode", "worker_count", "group_parallelism",
+        "min_seconds", "max_seconds", "publish_batch_size", "intensity",
+        "effect_background", "effect_zoom", "effect_color", "effect_texture",
+        "effect_speed", "effect_vignette", "effect_center_scratch",
+        "effect_light_sweep", "effect_film_grain", "effect_frame_extract",
+        "effect_frame_interpolate", "effect_md5", "effect_border",
+        "effect_random_transition", "effect_remove_progress", "effect_hook_clip",
+        "effect_hook_caption", "effect_english_subtitles", "subtitle_model",
+        "hook_clip_seconds", "hook_duration", "hook_texts", "intro_text",
+        "advanced_pipeline", "advanced_crop_min", "advanced_crop_max",
+        "advanced_speed_min", "advanced_speed_max", "advanced_head_min",
+        "advanced_head_max", "advanced_tail_min", "advanced_tail_max",
+        "advanced_color_min", "advanced_color_max", "advanced_fps",
+        "advanced_resolution", "advanced_interpolate", "advanced_blur_bottom",
+        "advanced_blur_sigma_min", "advanced_blur_sigma_max", "advanced_border",
+        "advanced_eq_bands", "advanced_reverb", "advanced_watermark_path",
+        "advanced_watermark_opacity", "advanced_watermark_width",
+        "advanced_style_mode", "advanced_style_opacity", "advanced_style_grain",
+        "advanced_pip_path", "advanced_pip_enabled", "advanced_ambient_path",
+        "advanced_ambient_db", "advanced_bgm_path", "advanced_bgm_db",
+        "advanced_project_name", "advanced_project_version",
+    }
+    saved = {key: value for key, value in payload.items() if key in allowed}
+    saved.setdefault("versions_per_episode", 1)
+    saved.setdefault("worker_count", 3)
+    saved.setdefault("group_parallelism", 1)
+    saved.setdefault("min_seconds", 28)
+    saved.setdefault("max_seconds", 30)
+    saved.setdefault("publish_batch_size", 5)
+    saved.setdefault("intensity", "balanced")
+    config = save_baidu_config(DATA_DIR, {"auto_task_config": saved})
+    return {"ok": True, "auto_task_config": dict(config.get("auto_task_config") or {})}
 
 
 @app.get("/api/cloud/baidu/auth-url")
@@ -2196,6 +2494,7 @@ def create_drama_reel_root_batch(payload: dict[str, Any] = Body(default_factory=
             output_count=max(1, len(source_paths) * safe_versions),
             message=f"等待处理目录 {index}/{len(groups)}：{group['name']}",
             tool_options={
+                **_advanced_profile_from_payload(payload),
                 "output_dir": str(group_output),
                 "versions_per_episode": safe_versions,
                 "min_seconds": safe_min_seconds,
@@ -2319,6 +2618,7 @@ async def drama_reels_batch(
         hook_texts=_parse_hook_texts(hook_texts),
         hook_duration=max(1.0, min(float(hook_duration or 3.0), 8.0)),
     )
+    saved_profile = dict(load_baidu_config(DATA_DIR).get("auto_task_config") or {})
     task = VariantTask(
         task_id=task_id,
         operation="drama_batch_reels",
@@ -2332,6 +2632,7 @@ async def drama_reels_batch(
         output_count=max(1, estimated_parts * safe_versions),
         message="等待整集 Reel 批处理",
         tool_options={
+            **_advanced_profile_from_payload(saved_profile),
             "output_dir": str(resolved_output_dir),
             "versions_per_episode": safe_versions,
             "min_seconds": safe_min_seconds,

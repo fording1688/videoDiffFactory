@@ -329,7 +329,7 @@
           <div class="section-title">
             <p class="eyebrow">BAIDU NETDISK</p>
             <h2>个人百度网盘</h2>
-            <p class="tool-copy">通过百度开放平台 OAuth 授权。处理视频和 Short Drama 完成后，自动上传最终视频；本地文件始终保留。</p>
+            <p class="tool-copy">从网盘素材目录自动拉取整部剧，连续两次扫描未变化后开始处理；成品可自动上传并按需清理本地文件。</p>
           </div>
           <form id="baiduCloudForm" class="mini-form">
             <div class="field-row two-col">
@@ -340,13 +340,122 @@
               <label>目标目录<input id="baiduRemoteDir" type="text" placeholder="/apps/应用名称/VideoVariantStudio" /></label>
               <label>OAuth 回调地址<input id="baiduRedirectUri" type="text" value="oob" placeholder="oob" /></label>
             </div>
+            <div class="field-row two-col">
+              <label>网盘素材收件箱<input id="baiduInboxDir" type="text" placeholder="/apps/应用名称/待处理" /></label>
+              <label>扫描间隔（秒）<input id="baiduWatchInterval" type="number" min="30" max="3600" value="60" /></label>
+            </div>
+            <div class="field-row two-col">
+              <label>服务器素材目录<input id="baiduLocalInbox" type="text" placeholder="/root/autodl-tmp/video-input" /></label>
+              <label>服务器成品目录<input id="baiduLocalOutput" type="text" placeholder="/root/autodl-tmp/video-output" /></label>
+            </div>
             <label class="check-row compact-check">
               <input id="baiduAutoUpload" type="checkbox" /> 处理完成后自动上传
             </label>
+            <label class="check-row compact-check">
+              <input id="baiduAutoWatch" type="checkbox" /> 开机后自动扫描素材收件箱（同一文件夹连续两次未变化才开始）
+            </label>
+            <label class="check-row compact-check">
+              <input id="baiduCleanupAfterUpload" type="checkbox" /> 成品确认上传成功后删除服务器上的成品文件
+            </label>
+            <label class="check-row compact-check">
+              <input id="baiduShutdownWhenIdle" type="checkbox" /> 本批任务及网盘上传全部完成 90 秒后自动关闭 AutoDL
+            </label>
+            <div class="cloud-auto-config">
+              <h3>微信任务通知（PushPlus）</h3>
+              <div class="field-row two-col">
+                <label>PushPlus Token
+                  <input id="pushplusToken" type="password" autocomplete="new-password" placeholder="已保存时可留空" />
+                </label>
+                <label class="check-row compact-check">
+                  <input id="pushplusNotifyEnabled" type="checkbox" /> 百度网盘上传成功或失败时通知微信
+                </label>
+              </div>
+              <button id="pushplusTestButton" class="secondary compact" type="button">发送测试通知</button>
+              <p id="pushplusStatus" class="hint">尚未配置 PushPlus。</p>
+            </div>
+            <div class="cloud-auto-config">
+              <h3>统一处理配置</h3>
+              <p class="hint">这套配置同时用于“处理视频”、“Short Drama”和百度网盘自动任务；切片秒数只对 Short Drama 和自动跑剧生效。</p>
+              <div class="field-row three-col">
+                <label>处理强度
+                  <select id="profileIntensity"><option value="light">轻微</option><option value="balanced" selected>均衡推荐</option><option value="strong">明显</option></select>
+                </label>
+                <label>每段版本数<input id="profileVersions" type="number" min="1" max="10" value="1" /></label>
+                <label>处理线程数<input id="profileWorkers" type="number" min="1" max="8" value="3" /></label>
+                <label>切片最短秒数<input id="profileMinSeconds" type="number" min="5" max="90" step="0.5" value="28" /></label>
+                <label>切片最长秒数<input id="profileMaxSeconds" type="number" min="5" max="120" step="0.5" value="30" /></label>
+              </div>
+              <div id="profileEffects" class="switches">
+                <label><input type="checkbox" data-effect="effect_background" checked /> 换背景</label>
+                <label><input type="checkbox" data-effect="effect_zoom" checked /> 随机微缩放/偏移</label>
+                <label><input type="checkbox" data-effect="effect_color" checked /> 色彩微调</label>
+                <label><input type="checkbox" data-effect="effect_texture" checked /> 质感噪点</label>
+                <label><input type="checkbox" data-effect="effect_speed" checked /> 改播放速度</label>
+                <label><input type="checkbox" data-effect="effect_vignette" checked /> 暗角层</label>
+                <label><input type="checkbox" data-effect="effect_center_scratch" checked /> 中线划痕</label>
+                <label><input type="checkbox" data-effect="effect_light_sweep" checked /> 动态扫光</label>
+                <label><input type="checkbox" data-effect="effect_film_grain" checked /> 胶片颗粒</label>
+                <label><input type="checkbox" data-effect="effect_frame_extract" checked /> 帧提取</label>
+                <label><input type="checkbox" data-effect="effect_frame_interpolate" /> 插帧</label>
+                <label><input type="checkbox" data-effect="effect_md5" checked /> MD5 修改</label>
+                <label><input type="checkbox" data-effect="effect_border" checked /> 加边框</label>
+                <label><input type="checkbox" data-effect="effect_random_transition" checked /> 随机转场</label>
+                <label><input type="checkbox" data-effect="effect_remove_progress" checked /> 移除进度条</label>
+                <label><input type="checkbox" data-effect="effect_hook_clip" /> 开头爆点</label>
+                <label><input type="checkbox" data-effect="effect_hook_caption" /> 钩子文字</label>
+                <label><input type="checkbox" data-effect="effect_english_subtitles" /> 英文字幕</label>
+              </div>
+              <div class="hook-panel advanced-panel">
+                <h4>通用字幕与高级流水线</h4>
+                <p class="hint">以下参数同样应用到“处理视频”、Short Drama 和百度网盘自动任务。</p>
+                <div class="field-row three-col">
+                  <label>字幕识别模型
+                    <select id="profileSubtitleModel"><option value="base" selected>Base（较快）</option><option value="small">Small（更准确）</option></select>
+                  </label>
+                  <label class="check-row compact-check"><input id="profileAdvancedPipeline" type="checkbox" /> 启用高级单次渲染流水线</label>
+                  <label>输出分辨率
+                    <select id="profileAdvancedResolution"><option value="720p" selected>720P（快速，推荐）</option><option value="1080p">1080P（高清）</option><option value="source">跟随原视频</option></select>
+                  </label>
+                  <label>输出帧率
+                    <select id="profileAdvancedFps"><option value="0" selected>随机 30/60 FPS</option><option value="30">固定 30 FPS</option><option value="60">固定 60 FPS</option></select>
+                  </label>
+                </div>
+                <div class="field-row two-col">
+                  <label>裁剪比例
+                    <span class="inline-values"><input id="profileAdvancedCropMin" type="number" min="0" max="0.15" step="0.001" value="0.02" /><input id="profileAdvancedCropMax" type="number" min="0" max="0.15" step="0.001" value="0.05" /></span>
+                  </label>
+                  <label>变速范围
+                    <span class="inline-values"><input id="profileAdvancedSpeedMin" type="number" min="0.5" max="2" step="0.001" value="1.015" /><input id="profileAdvancedSpeedMax" type="number" min="0.5" max="2" step="0.001" value="1.045" /></span>
+                  </label>
+                  <label>色彩/饱和度
+                    <span class="inline-values"><input id="profileAdvancedColorMin" type="number" min="0.5" max="2" step="0.01" value="0.98" /><input id="profileAdvancedColorMax" type="number" min="0.5" max="2" step="0.01" value="1.03" /></span>
+                  </label>
+                  <label>头部剪切（秒）
+                    <span class="inline-values"><input id="profileAdvancedHeadMin" type="number" min="0" step="0.1" value="0.2" /><input id="profileAdvancedHeadMax" type="number" min="0" step="0.1" value="0.5" /></span>
+                  </label>
+                  <label>尾部剪切（秒）
+                    <span class="inline-values"><input id="profileAdvancedTailMin" type="number" min="0" step="0.1" value="0.3" /><input id="profileAdvancedTailMax" type="number" min="0" step="0.1" value="0.6" /></span>
+                  </label>
+                  <label>模糊强度
+                    <span class="inline-values"><input id="profileAdvancedBlurMin" type="number" min="0.1" max="100" step="0.1" value="14" /><input id="profileAdvancedBlurMax" type="number" min="0.1" max="100" step="0.1" value="22" /></span>
+                  </label>
+                </div>
+                <div class="switches">
+                  <label><input id="profileAdvancedInterpolate" type="checkbox" /> 光流平滑插帧</label>
+                  <label><input id="profileAdvancedBlurBottom" type="checkbox" /> 模糊底部 12%</label>
+                  <label><input id="profileAdvancedBorder" type="checkbox" /> 可见边框</label>
+                  <label><input id="profileAdvancedReverb" type="checkbox" /> 房间混响</label>
+                  <label><input id="profileAdvancedPip" type="checkbox" /> 可见画中画</label>
+                </div>
+              </div>
+              <button id="baiduSaveAutoTaskButton" class="secondary compact" type="button">保存并应用到三个入口</button>
+              <p id="baiduAutoTaskStatus" class="hint">当前使用默认配置：均衡、28–30 秒、1 个版本、3 线程。</p>
+            </div>
             <div class="cloud-actions">
               <button id="baiduSaveButton" class="secondary compact" type="submit">保存设置</button>
               <button id="baiduAuthorizeButton" class="secondary compact" type="button">打开百度授权</button>
               <button id="baiduDisconnectButton" class="danger-button compact" type="button">解除授权</button>
+              <button id="baiduScanNowButton" class="secondary compact" type="button">立即扫描</button>
             </div>
             <label>授权码<input id="baiduAuthCode" type="text" autocomplete="off" placeholder="授权完成后，把页面显示的 code 粘贴到这里" /></label>
             <button id="baiduSubmitCodeButton" class="primary" type="button">提交授权码</button>
